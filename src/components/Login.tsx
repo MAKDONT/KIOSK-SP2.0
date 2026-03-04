@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
+import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 
 interface Faculty {
   id: string;
@@ -51,7 +52,19 @@ export default function Login() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [activeField, setActiveField] = useState<KeyboardField>("identifier");
   const [capsLock, setCapsLock] = useState(true);
+  const [scannerReady, setScannerReady] = useState(false);
+  const [scannerStatus, setScannerStatus] = useState("Tap Start Camera to scan student barcode.");
+  const [scannerError, setScannerError] = useState("");
   const navigate = useNavigate();
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const detectorRef = useRef<any>(null);
+  const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const zxingControlsRef = useRef<IScannerControls | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const scanningRef = useRef(false);
+  const autoLoginInProgressRef = useRef(false);
 
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -266,46 +279,235 @@ export default function Login() {
     setFieldValue(activeField, "");
   };
 
+  const proceedStudentLogin = useCallback(async (normalizedIdentifier: string, mode: "scan" | "manual") => {
+    if (!normalizedIdentifier) {
+      throw new Error("Student ID is required.");
+    }
+
+    if (mode === "scan") {
+      // Check if student exists
+      const res = await fetch(`/api/students/${encodeURIComponent(normalizedIdentifier)}`);
+      if (!res.ok) {
+        throw new Error("Student not found in database. Please use Manual Input.");
+      }
+      const studentData = await res.json();
+      localStorage.setItem("student_id", studentData.id);
+      localStorage.setItem("student_name", studentData.name);
+      localStorage.setItem("student_email", studentData.email || "");
+      localStorage.setItem("student_course", studentData.course || "");
+    } else {
+      // Manual input
+      const normalizedName = studentName.trim();
+      const normalizedEmail = studentEmail.trim();
+      const normalizedCourse = course.trim();
+
+      if (!normalizedName || !normalizedEmail || !normalizedCourse) {
+        throw new Error("Please fill in all fields.");
+      }
+
+      localStorage.setItem("student_id", normalizedIdentifier);
+      localStorage.setItem("student_name", normalizedName);
+      localStorage.setItem("student_email", normalizedEmail);
+      localStorage.setItem("student_course", normalizedCourse);
+    }
+
+    localStorage.setItem("user_role", "student");
+
+    // Check for active queue
+    const queueRes = await fetch(`/api/student/${encodeURIComponent(normalizedIdentifier)}/active-queue`);
+    const queueData = await queueRes.json();
+
+    if (queueRes.ok && queueData.id) {
+      navigate(`/student/${queueData.id}`);
+    } else {
+      navigate(`/kiosk`);
+    }
+  }, [course, navigate, studentEmail, studentName]);
+
+  const stopScanner = useCallback((resetStatus = false) => {
+    scanningRef.current = false;
+
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (zxingControlsRef.current) {
+      try {
+        zxingControlsRef.current.stop();
+      } catch {
+        // ignore scanner stop errors
+      }
+      zxingControlsRef.current = null;
+    }
+
+    zxingReaderRef.current = null;
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setScannerReady(false);
+
+    if (resetStatus) {
+      setScannerStatus("Tap Start Camera to scan student barcode.");
+    }
+  }, []);
+
+  const handleScannedIdentifier = useCallback(async (rawValue: string) => {
+    const normalizedIdentifier = rawValue.trim();
+    if (!normalizedIdentifier || autoLoginInProgressRef.current) return;
+
+    autoLoginInProgressRef.current = true;
+    setLoading(true);
+    setError("");
+    setScannerError("");
+    setKeyboardOpen(false);
+    setIdentifier(normalizedIdentifier);
+    setScannerStatus(`Scanned: ${normalizedIdentifier}. Verifying...`);
+    stopScanner(false);
+
+    try {
+      await proceedStudentLogin(normalizedIdentifier, "scan");
+    } catch (err: any) {
+      const message = err?.message || "Student not found in database. Please use Manual Input.";
+      setError(message);
+      setScannerStatus(`Scanned: ${normalizedIdentifier}. ${message}`);
+    } finally {
+      autoLoginInProgressRef.current = false;
+      setLoading(false);
+    }
+  }, [proceedStudentLogin, stopScanner]);
+
+  const startScanner = useCallback(async () => {
+    stopScanner();
+    setScannerError("");
+    setScannerStatus("Starting camera...");
+
+    const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+
+    const videoElement = videoRef.current;
+    if (!videoElement) {
+      setScannerError("Scanner preview unavailable.");
+      setScannerStatus("Camera unavailable.");
+      return;
+    }
+
+    if (BarcodeDetectorCtor) {
+      try {
+        detectorRef.current = new BarcodeDetectorCtor({
+          formats: [
+            "code_128",
+            "code_39",
+            "ean_13",
+            "ean_8",
+            "qr_code",
+            "upc_a",
+            "upc_e",
+            "pdf417",
+          ],
+        });
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        streamRef.current = stream;
+
+        videoElement.srcObject = stream;
+        await videoElement.play();
+
+        scanningRef.current = true;
+        setScannerReady(true);
+        setScannerStatus("Point barcode to camera.");
+
+        const detectFrame = async () => {
+          if (!scanningRef.current) return;
+
+          try {
+            if (videoElement.readyState >= 2 && detectorRef.current) {
+              const detected = await detectorRef.current.detect(videoElement);
+              if (Array.isArray(detected) && detected.length > 0) {
+                const rawValue = String(detected[0]?.rawValue || "").trim();
+                if (rawValue) {
+                  void handleScannedIdentifier(rawValue);
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Ignore single-frame detection issues and continue scanning.
+          }
+
+          animationFrameRef.current = requestAnimationFrame(() => {
+            void detectFrame();
+          });
+        };
+
+        animationFrameRef.current = requestAnimationFrame(() => {
+          void detectFrame();
+        });
+        return;
+      } catch (err: any) {
+        console.error("Native scanner failed, falling back to ZXing", err);
+      }
+    }
+
+    // Fallback scanner for browsers without BarcodeDetector support.
+    try {
+      const reader = new BrowserMultiFormatReader();
+      zxingReaderRef.current = reader;
+
+      scanningRef.current = true;
+      setScannerReady(true);
+      setScannerStatus("Compatibility scanner active. Point barcode to camera.");
+
+      const controls = await reader.decodeFromVideoDevice(undefined, videoElement, (result) => {
+        if (!scanningRef.current || !result) return;
+
+        const rawValue = String(result.getText() || "").trim();
+        if (!rawValue) return;
+
+        void handleScannedIdentifier(rawValue);
+      });
+
+      zxingControlsRef.current = controls;
+    } catch (err: any) {
+      console.error("Failed to start scanner", err);
+      setScannerError(err?.message || "Failed to access camera.");
+      setScannerStatus("Camera unavailable.");
+      stopScanner(false);
+    }
+  }, [handleScannedIdentifier, stopScanner]);
+
+  useEffect(() => {
+    if (inputMode === "scan") {
+      void startScanner();
+    } else {
+      stopScanner(true);
+      setScannerError("");
+    }
+
+    return () => {
+      stopScanner(false);
+    };
+  }, [inputMode, startScanner, stopScanner]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setKeyboardOpen(false);
+    stopScanner(false);
 
     try {
-      if (inputMode === "scan") {
-        // Check if student exists
-        const res = await fetch(`/api/students/${identifier}`);
-        if (!res.ok) {
-          throw new Error("Student not found in database. Please use Manual Input.");
-        }
-        const studentData = await res.json();
-        localStorage.setItem("student_id", studentData.id);
-        localStorage.setItem("student_name", studentData.name);
-        localStorage.setItem("student_email", studentData.email || "");
-        localStorage.setItem("student_course", studentData.course || "");
-      } else {
-        // Manual input
-        if (!identifier || !studentName || !studentEmail || !course) {
-          throw new Error("Please fill in all fields.");
-        }
-        localStorage.setItem("student_id", identifier);
-        localStorage.setItem("student_name", studentName);
-        localStorage.setItem("student_email", studentEmail);
-        localStorage.setItem("student_course", course);
-      }
-
-      localStorage.setItem("user_role", "student");
-
-      // Check for active queue
-      const queueRes = await fetch(`/api/student/${identifier}/active-queue`);
-      const queueData = await queueRes.json();
-
-      if (queueRes.ok && queueData.id) {
-        navigate(`/student/${queueData.id}`);
-      } else {
-        navigate(`/kiosk`);
-      }
+      const normalizedIdentifier = identifier.trim();
+      await proceedStudentLogin(normalizedIdentifier, inputMode);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -448,17 +650,55 @@ export default function Login() {
 
               {inputMode === "scan" ? (
                 <div className="space-y-4">
-                  <div className="w-full h-32 border-2 border-dashed border-emerald-300 rounded-2xl flex flex-col items-center justify-center bg-emerald-50 text-emerald-500 animate-pulse">
-                    <ScanLine className="w-10 h-10 mb-2" />
-                    <span className="text-sm font-bold">Scan ID Here</span>
+                  <div className="w-full h-44 border-2 border-dashed border-emerald-300 rounded-2xl bg-emerald-50 relative overflow-hidden">
+                    <video
+                      ref={videoRef}
+                      className={`w-full h-full object-cover transition-opacity ${scannerReady ? "opacity-100" : "opacity-0"}`}
+                      autoPlay
+                      muted
+                      playsInline
+                    />
+                    {!scannerReady && (
+                      <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-emerald-600">
+                        <ScanLine className="w-10 h-10 mb-2" />
+                        <span className="text-sm font-bold">Camera Scanner</span>
+                      </div>
+                    )}
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void startScanner(); }}
+                      className="py-2.5 px-3 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-semibold text-sm"
+                    >
+                      {scannerReady ? "Restart Camera" : "Start Camera"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIdentifier("");
+                        setError("");
+                        setScannerStatus("Ready to rescan.");
+                        void startScanner();
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-semibold text-sm"
+                    >
+                      Clear & Rescan
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-neutral-500">
+                    {scannerStatus}
+                  </p>
+                  {scannerError && <p className="text-xs text-red-600">{scannerError}</p>}
+
                   <input
                     type="text"
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
-                    onFocus={() => openKeyboardForField("identifier")}
-                    onClick={() => openKeyboardForField("identifier")}
-                    inputMode="none"
+                    onFocus={() => setActiveField("identifier")}
+                    onClick={() => setActiveField("identifier")}
                     placeholder="Or type Student ID and press Enter"
                     className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors text-lg"
                     required
