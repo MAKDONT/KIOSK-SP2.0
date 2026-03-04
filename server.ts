@@ -8,38 +8,145 @@ import { google } from "googleapis";
 import multer from "multer";
 import fs from "fs";
 import dotenv from "dotenv";
+import { Readable } from "stream";
+import path from "path";
 
 // Load environment variables from .env.local
 dotenv.config({ path: '.env.local' });
 
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads');
+const rawAppDataDir = process.env.APP_DATA_DIR?.trim() || "";
+const appDataDirFromEnv =
+  (rawAppDataDir.startsWith('"') && rawAppDataDir.endsWith('"')) ||
+  (rawAppDataDir.startsWith("'") && rawAppDataDir.endsWith("'"))
+    ? rawAppDataDir.slice(1, -1)
+    : rawAppDataDir;
+const APP_DATA_DIR = appDataDirFromEnv ? path.resolve(appDataDirFromEnv) : process.cwd();
+const UPLOADS_DIR = path.join(APP_DATA_DIR, "uploads");
+
+if (!fs.existsSync(APP_DATA_DIR)) {
+  fs.mkdirSync(APP_DATA_DIR, { recursive: true });
 }
 
-const upload = multer({ dest: 'uploads/' });
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
-const TOKEN_PATH = 'drive-tokens.json';
+const upload = multer({ dest: UPLOADS_DIR });
 
-function getAdminTokens() {
-  if (fs.existsSync(TOKEN_PATH)) {
+const TOKEN_PATH = path.join(APP_DATA_DIR, "drive-tokens.json");
+const TOKEN_MAX_AGE_DAYS = 60;
+const OAUTH_CALLBACK_PATH = '/api/auth/google/callback';
+const LEGACY_OAUTH_CALLBACK_PATH = '/auth/callback';
+const GOOGLE_DRIVE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive";
+
+type AdminDriveAuthData = {
+  tokens: any;
+  timestamp: number;
+  redirectUri?: string;
+};
+
+type GoogleServiceAccountCredentials = {
+  client_email: string;
+  private_key: string;
+};
+
+const unwrapEnvValue = (value?: string) => {
+  if (!value) return "";
+  const trimmed = value.trim();
+  return (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  )
+    ? trimmed.slice(1, -1)
+    : trimmed;
+};
+
+function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
+  const credentialsFilePath = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_FILE);
+  if (credentialsFilePath) {
     try {
-      const data = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8'));
-      const ageInDays = (Date.now() - data.timestamp) / (1000 * 60 * 60 * 24);
-      if (ageInDays > 60) {
-        return null;
+      const fromFile = JSON.parse(fs.readFileSync(credentialsFilePath, "utf-8"));
+      if (typeof fromFile.client_email === "string" && typeof fromFile.private_key === "string") {
+        return {
+          client_email: fromFile.client_email,
+          private_key: fromFile.private_key.replace(/\\n/g, "\n"),
+        };
       }
-      return data.tokens;
-    } catch (e) {
-      return null;
+    } catch (err) {
+      console.error("Failed to load GOOGLE_SERVICE_ACCOUNT_FILE:", err);
     }
   }
+
+  const rawJson = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+
+  if (rawJson) {
+    const candidates = [rawJson];
+    if (!rawJson.startsWith("{")) {
+      try {
+        candidates.push(Buffer.from(rawJson, "base64").toString("utf-8"));
+      } catch {
+        // Ignore invalid base64 candidate and continue.
+      }
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (typeof parsed.client_email === "string" && typeof parsed.private_key === "string") {
+          return {
+            client_email: parsed.client_email,
+            private_key: parsed.private_key.replace(/\\n/g, "\n"),
+          };
+        }
+      } catch {
+        // Ignore malformed JSON and continue.
+      }
+    }
+  }
+
+  const clientEmail = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
+  const privateKey = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY).replace(/\\n/g, "\n");
+
+  if (clientEmail && privateKey) {
+    return {
+      client_email: clientEmail,
+      private_key: privateKey,
+    };
+  }
+
   return null;
 }
 
-function saveAdminTokens(tokens: any) {
+function readAdminDriveAuthData(): AdminDriveAuthData | null {
+  if (!fs.existsSync(TOKEN_PATH)) {
+    return null;
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')) as AdminDriveAuthData;
+    const ageInDays = (Date.now() - data.timestamp) / (1000 * 60 * 60 * 24);
+    if (ageInDays > TOKEN_MAX_AGE_DAYS) {
+      return null;
+    }
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+function getAdminTokens() {
+  return readAdminDriveAuthData()?.tokens || null;
+}
+
+function getAdminRedirectUri() {
+  return readAdminDriveAuthData()?.redirectUri || null;
+}
+
+function saveAdminTokens(tokens: any, redirectUri: string) {
   fs.writeFileSync(TOKEN_PATH, JSON.stringify({
     tokens,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    redirectUri
   }));
 }
 
@@ -97,11 +204,142 @@ function getSupabase(): SupabaseClient {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
 
   app.use(express.json());
+  app.set("trust proxy", true);
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true, uptime: Math.floor(process.uptime()) });
+  });
+
+  const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+  const getQueryString = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value) && typeof value[0] === "string") {
+      return value[0];
+    }
+    return null;
+  };
+  const normalizeOAuthRedirectUri = (value: string) => {
+    const trimmed = value.trim();
+    const cleaned =
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))
+        ? trimmed.slice(1, -1)
+        : trimmed;
+    try {
+      const parsed = new URL(cleaned);
+      const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+
+      if (normalizedPath === "" || normalizedPath === "/") {
+        parsed.pathname = OAUTH_CALLBACK_PATH;
+      } else if (normalizedPath === LEGACY_OAUTH_CALLBACK_PATH) {
+        parsed.pathname = OAUTH_CALLBACK_PATH;
+      } else {
+        parsed.pathname = normalizedPath;
+      }
+
+      return parsed.toString();
+    } catch {
+      return cleaned;
+    }
+  };
+  const resolveOAuthRedirectUri = (req?: express.Request) => {
+    const explicitRedirect =
+      process.env.GOOGLE_REDIRECT_URI ||
+      process.env.GOOGLE_REDIRECT_URL;
+    if (explicitRedirect) {
+      return normalizeOAuthRedirectUri(explicitRedirect);
+    }
+
+    if (req) {
+      const forwardedProtoHeader = req.headers["x-forwarded-proto"];
+      const forwardedProto = Array.isArray(forwardedProtoHeader)
+        ? forwardedProtoHeader[0]
+        : typeof forwardedProtoHeader === "string"
+          ? forwardedProtoHeader.split(",")[0]
+          : "";
+      const host = req.get("host");
+      if (host) {
+        const hostLower = host.toLowerCase();
+        const isLocalHost =
+          hostLower.startsWith("localhost") ||
+          hostLower.startsWith("127.0.0.1") ||
+          hostLower.startsWith("[::1]");
+        let protocol = (forwardedProto || req.protocol || "").trim();
+        if (!protocol) {
+          protocol = isLocalHost ? "http" : "https";
+        } else if (!isLocalHost && protocol === "http") {
+          protocol = "https";
+        }
+        return normalizeOAuthRedirectUri(`${protocol}://${host}${OAUTH_CALLBACK_PATH}`);
+      }
+    }
+
+    const explicitBase = process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL;
+    if (explicitBase) {
+      return normalizeOAuthRedirectUri(`${trimTrailingSlash(explicitBase)}${OAUTH_CALLBACK_PATH}`);
+    }
+
+    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+      return normalizeOAuthRedirectUri(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}${OAUTH_CALLBACK_PATH}`);
+    }
+
+    return normalizeOAuthRedirectUri(`http://localhost:${PORT}${OAUTH_CALLBACK_PATH}`);
+  };
+
+  type DriveAuthContext =
+    | { mode: "service_account"; auth: any }
+    | { mode: "oauth"; auth: any; tokens: any; redirectUri: string };
+
+  const hasServiceAccountAuth = () => !!getServiceAccountCredentialsFromEnv();
+
+  const getDriveConnectionMode = (): "service_account" | "oauth" | "none" => {
+    if (hasServiceAccountAuth()) return "service_account";
+    if (getAdminTokens()) return "oauth";
+    return "none";
+  };
+
+  const getDriveAuthContext = (req?: express.Request): DriveAuthContext => {
+    const serviceAccountCredentials = getServiceAccountCredentialsFromEnv();
+    if (serviceAccountCredentials) {
+      const auth = new google.auth.GoogleAuth({
+        credentials: serviceAccountCredentials,
+        scopes: [GOOGLE_DRIVE_UPLOAD_SCOPE],
+      });
+      return { mode: "service_account", auth };
+    }
+
+    const tokens = getAdminTokens();
+    if (!tokens) {
+      throw new Error("Google Drive is not connected. Configure a service account or connect an admin Google account.");
+    }
+
+    const redirectUri = getAdminRedirectUri() || resolveOAuthRedirectUri(req);
+    const oauth2Client = getOAuth2Client(redirectUri);
+    oauth2Client.setCredentials(tokens);
+
+    return {
+      mode: "oauth",
+      auth: oauth2Client,
+      tokens,
+      redirectUri,
+    };
+  };
+
+  const persistOAuthTokens = (context: DriveAuthContext) => {
+    if (context.mode !== "oauth") return;
+
+    const mergedTokens = { ...context.tokens, ...context.auth.credentials };
+    if (mergedTokens.refresh_token || context.tokens.refresh_token) {
+      saveAdminTokens(mergedTokens, context.redirectUri);
+    }
+  };
 
   // WebSocket Broadcast Helper
   function broadcast(type: string, payload: any) {
@@ -944,26 +1182,26 @@ async function startServer() {
   }, 60 * 1000); // Run every minute
 
   // Google Drive OAuth and Upload
-  const getOAuth2Client = (redirectUri: string) => {
+  const getOAuth2Client = (redirectUri?: string) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
       throw new Error("Google Client ID or Secret is not configured in environment variables.");
     }
     return new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      redirectUri
+      redirectUri || resolveOAuthRedirectUri()
     );
   };
 
   // Cleanup old recordings every minute (for testing)
   setInterval(async () => {
-    const tokens = getAdminTokens();
-    if (!tokens) return;
+    if (getDriveConnectionMode() === "none") return;
     
+    let activeMode: "service_account" | "oauth" | "none" = "none";
     try {
-      const oauth2Client = getOAuth2Client('http://localhost:3000');
-      oauth2Client.setCredentials(tokens);
-      const drive = google.drive({ version: 'v3', auth: oauth2Client });
+      const authContext = getDriveAuthContext();
+      activeMode = authContext.mode;
+      const drive = google.drive({ version: 'v3', auth: authContext.auth });
       
       // 5 minutes ago for testing
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -971,36 +1209,50 @@ async function startServer() {
       const response = await drive.files.list({
         q: `appProperties has { key='source' and value='consultation-system' } and createdTime < '${fiveMinutesAgo}'`,
         fields: 'files(id, name)',
+        supportsAllDrives: true,
       });
       
       const files = response.data.files || [];
       for (const file of files) {
         if (file.id) {
-          await drive.files.delete({ fileId: file.id });
+          await drive.files.delete({ fileId: file.id, supportsAllDrives: true });
           console.log(`[Drive Cleanup] Deleted old recording: ${file.name}`);
         }
       }
-    } catch (err) {
+      persistOAuthTokens(authContext);
+    } catch (err: any) {
       console.error("[Drive Cleanup] Error:", err);
+      if (activeMode === "oauth" && (err?.message || "").includes("invalid_grant") && fs.existsSync(TOKEN_PATH)) {
+        fs.unlinkSync(TOKEN_PATH);
+      }
     }
   }, 60 * 1000); // Run every minute
 
   app.get("/api/auth/google/url", (req, res) => {
     try {
-      const redirectUri = req.query.redirect_uri as string;
-      if (!redirectUri) return res.status(400).json({ error: "redirect_uri required" });
-      
+      if (hasServiceAccountAuth()) {
+        return res.json({
+          url: null,
+          redirectUri: null,
+          mode: "service_account",
+          message: "Service account mode is enabled. Admin OAuth is not required."
+        });
+      }
+
+      const redirectUri = resolveOAuthRedirectUri(req);
       const oauth2Client = getOAuth2Client(redirectUri);
       
-      const stateString = Buffer.from(JSON.stringify({ redirectUri })).toString('base64');
+      const stateString = Buffer
+        .from(JSON.stringify({ redirectUri }), "utf-8")
+        .toString('base64url');
       
       const url = oauth2Client.generateAuthUrl({
         access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/drive.file'],
+        scope: [GOOGLE_DRIVE_UPLOAD_SCOPE],
         state: stateString,
         prompt: 'consent'
       });
-      res.json({ url });
+      res.json({ url, redirectUri, mode: "oauth" });
     } catch (err: any) {
       console.error("OAuth URL Error:", err);
       res.status(500).json({ error: err.message });
@@ -1008,34 +1260,54 @@ async function startServer() {
   });
 
   app.get("/api/auth/google/callback", async (req, res) => {
-    const { code, state } = req.query;
+    const code = getQueryString(req.query.code);
+    const state = getQueryString(req.query.state);
     try {
-      if (!state) throw new Error("Missing state parameter");
+      if (hasServiceAccountAuth()) {
+        return res
+          .status(400)
+          .send("Service account mode is enabled. OAuth callback is not used.");
+      }
+
+      if (!code) throw new Error("Missing code parameter");
       
-      let stateObj;
-      try {
-        stateObj = JSON.parse(Buffer.from(state as string, 'base64').toString('utf-8'));
-      } catch (e) {
-        // Fallback for older non-base64 encoded states if any
-        stateObj = JSON.parse(state as string);
+      let stateObj: { redirectUri?: string } = {};
+      if (state) {
+        try {
+          stateObj = JSON.parse(Buffer.from(state, 'base64url').toString('utf-8'));
+        } catch (err) {
+          try {
+            stateObj = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+          } catch (fallbackErr) {
+            // Fallback for older non-base64 encoded states if any
+            stateObj = JSON.parse(state);
+          }
+        }
       }
       
-      const redirectUri = stateObj.redirectUri;
-
-      if (!redirectUri) throw new Error("Missing redirectUri in state");
+      const redirectUri = stateObj.redirectUri || resolveOAuthRedirectUri(req);
 
       const oauth2Client = getOAuth2Client(redirectUri);
       
-      const { tokens } = await oauth2Client.getToken(code as string);
+      const { tokens } = await oauth2Client.getToken(code);
+      const mergedTokens = { ...(getAdminTokens() || {}), ...tokens };
       
-      saveAdminTokens(tokens);
+      saveAdminTokens(mergedTokens, redirectUri);
+
+      const targetOrigin = (() => {
+        try {
+          return new URL(redirectUri).origin;
+        } catch {
+          return "*";
+        }
+      })();
       
       res.send(`
         <html>
           <body>
             <script>
               if (window.opener) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '${targetOrigin}');
                 window.close();
               } else {
                 window.location.href = '/';
@@ -1052,15 +1324,24 @@ async function startServer() {
   });
 
   app.get("/api/drive/status", (req, res) => {
-    res.json({ connected: !!getAdminTokens() });
+    const mode = getDriveConnectionMode();
+    res.json({ connected: mode !== "none", mode });
   });
 
   app.post("/api/drive/disconnect", (req, res) => {
     try {
+      if (hasServiceAccountAuth()) {
+        return res.json({
+          success: true,
+          mode: "service_account",
+          message: "Service account mode is controlled by environment variables."
+        });
+      }
+
       if (fs.existsSync(TOKEN_PATH)) {
         fs.unlinkSync(TOKEN_PATH);
       }
-      res.json({ success: true });
+      res.json({ success: true, mode: "oauth" });
     } catch (err: any) {
       console.error("Drive Disconnect Error:", err);
       res.status(500).json({ error: err.message });
@@ -1068,53 +1349,116 @@ async function startServer() {
   });
 
   app.post("/api/drive/upload", upload.single('file'), async (req, res) => {
+    let activeMode: "service_account" | "oauth" | "none" = "none";
     try {
       const file = req.file;
       
       if (!file) {
         return res.status(400).json({ error: "Missing file" });
       }
+
+      const authContext = getDriveAuthContext(req);
+      activeMode = authContext.mode;
+      const drive = google.drive({ version: 'v3', auth: authContext.auth });
+      const serviceAccountEmail =
+        activeMode === "service_account"
+          ? getServiceAccountCredentialsFromEnv()?.client_email || null
+          : null;
       
-      const tokens = getAdminTokens();
-      if (!tokens) {
-        return res.status(401).json({ error: "Admin Google Drive not connected" });
-      }
-      
-      // redirectUri doesn't matter here since we already have tokens
-      const oauth2Client = getOAuth2Client('http://localhost:3000');
-      
-      oauth2Client.setCredentials(tokens);
-      
-      const drive = google.drive({ version: 'v3', auth: oauth2Client });
-      
-      const fileMetadata = {
+      const fileMetadata: {
+        name: string;
+        appProperties: { source: string };
+        parents?: string[];
+      } = {
         name: file.originalname,
         appProperties: {
           source: 'consultation-system'
         }
       };
-      const media = {
-        mimeType: file.mimetype,
-        body: fs.createReadStream(file.path),
-      };
-      
-      const response = await drive.files.create({
-        requestBody: fileMetadata,
-        media: media,
-        fields: 'id, webViewLink',
+      const driveFolderId = unwrapEnvValue(process.env.GOOGLE_DRIVE_FOLDER_ID);
+      if (driveFolderId) {
+        fileMetadata.parents = [driveFolderId];
+      }
+      const uploadFileBuffer = fs.readFileSync(file.path);
+      const createUploadMedia = () => ({
+        mimeType: file.mimetype || "application/octet-stream",
+        body: Readable.from(uploadFileBuffer),
       });
+      
+      let response;
+      let warning: string | null = null;
+      try {
+        response = await drive.files.create({
+          requestBody: fileMetadata,
+          media: createUploadMedia(),
+          fields: 'id, webViewLink',
+          supportsAllDrives: true,
+        });
+      } catch (createErr: any) {
+        const createMessage = createErr?.message || "";
+        const hasFolderFallback = !!fileMetadata.parents?.length;
+        if (hasFolderFallback && createMessage.includes("File not found:")) {
+          if (activeMode === "service_account") {
+            throw new Error(
+              `Configured GOOGLE_DRIVE_FOLDER_ID is not accessible to the service account.${serviceAccountEmail ? ` Share the folder with ${serviceAccountEmail}.` : ""}`
+            );
+          }
+
+          // Fallback to account root if configured folder ID is not accessible.
+          const fallbackMetadata = {
+            name: file.originalname,
+            appProperties: fileMetadata.appProperties,
+          };
+          response = await drive.files.create({
+            requestBody: fallbackMetadata,
+            media: createUploadMedia(),
+            fields: 'id, webViewLink',
+            supportsAllDrives: true,
+          });
+          warning = "Configured GOOGLE_DRIVE_FOLDER_ID is not accessible. File was uploaded to Drive root instead.";
+        } else {
+          throw createErr;
+        }
+      }
       
       // Clean up local file
       fs.unlinkSync(file.path);
+
+      persistOAuthTokens(authContext);
       
-      res.json({ success: true, link: response.data.webViewLink });
+      res.json({
+        success: true,
+        link: response?.data.webViewLink,
+        mode: activeMode,
+        warning
+      });
     } catch (err: any) {
       console.error("Drive Upload Error:", err);
+      const errorMessage = err?.message || "Unknown error";
+      const notConnected = errorMessage.includes("Google Drive is not connected");
+      const folderNotFound =
+        errorMessage.includes("File not found:") ||
+        errorMessage.includes("GOOGLE_DRIVE_FOLDER_ID is not accessible");
+      const folderHint = folderNotFound
+        ? "Configured GOOGLE_DRIVE_FOLDER_ID is not accessible. Verify folder ID, share the folder with the service account email, or remove GOOGLE_DRIVE_FOLDER_ID."
+        : null;
+      const noQuotaForServiceAccount = errorMessage.includes("Service Accounts do not have storage quota");
+      const quotaHint = noQuotaForServiceAccount
+        ? "Service account is uploading outside an accessible shared folder/drive. Ensure GOOGLE_DRIVE_FOLDER_ID points to a folder shared with the service account, or switch to OAuth mode."
+        : null;
+      const configurationError = folderNotFound || noQuotaForServiceAccount;
+      if (activeMode === "oauth" && (err?.message || "").includes("invalid_grant") && fs.existsSync(TOKEN_PATH)) {
+        fs.unlinkSync(TOKEN_PATH);
+      }
       // Clean up local file if it exists
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
-      res.status(500).json({ error: err.message });
+      res.status(notConnected ? 401 : configurationError ? 400 : 500).json({
+        error: errorMessage,
+        reconnectRequired: activeMode === "oauth" && (err?.message || "").includes("invalid_grant"),
+        hint: folderHint || quotaHint
+      });
     }
   });
 
@@ -1126,7 +1470,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static("dist"));
+    const distPath = path.resolve(process.cwd(), "dist");
+    app.use(express.static(distPath));
+
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api")) {
+        return next();
+      }
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   }
 
   server.listen(PORT, "0.0.0.0", () => {
