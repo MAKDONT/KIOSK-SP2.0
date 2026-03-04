@@ -1,1 +1,21 @@
 @import "tailwindcss";
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  background-image: url("/earist-logo.jpg");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: min(56vw, 520px);
+  opacity: 0.06;
+}
+
+@media (max-width: 768px) {
+  body::before {
+    background-size: min(78vw, 360px);
+    opacity: 0.05;
+  }
+}

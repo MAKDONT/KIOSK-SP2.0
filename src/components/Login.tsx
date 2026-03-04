@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
-import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 
 interface Faculty {
   id: string;
@@ -27,6 +26,10 @@ interface LiveQueueItem {
   student_number: string;
   time_period?: string | null;
 }
+
+type ScannerControls = {
+  stop: () => void;
+};
 
 type KeyboardField = "identifier" | "studentName" | "studentEmail";
 
@@ -60,8 +63,8 @@ export default function Login() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<any>(null);
-  const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
-  const zxingControlsRef = useRef<IScannerControls | null>(null);
+  const zxingReaderRef = useRef<any | null>(null);
+  const zxingControlsRef = useRef<ScannerControls | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const scanningRef = useRef(false);
   const autoLoginInProgressRef = useRef(false);
@@ -460,7 +463,14 @@ export default function Login() {
 
     // Fallback scanner for browsers without BarcodeDetector support.
     try {
-      const reader = new BrowserMultiFormatReader();
+      const zxingModuleUrl = "https://esm.sh/@zxing/browser@0.1.5";
+      const zxingModule: any = await import(/* @vite-ignore */ zxingModuleUrl);
+      const ReaderCtor = zxingModule?.BrowserMultiFormatReader;
+      if (!ReaderCtor) {
+        throw new Error("Compatibility scanner module failed to load.");
+      }
+
+      const reader = new ReaderCtor();
       zxingReaderRef.current = reader;
 
       scanningRef.current = true;
@@ -479,7 +489,7 @@ export default function Login() {
       zxingControlsRef.current = controls;
     } catch (err: any) {
       console.error("Failed to start scanner", err);
-      setScannerError(err?.message || "Failed to access camera.");
+      setScannerError(err?.message || "Failed to access camera. Try Manual Input.");
       setScannerStatus("Camera unavailable.");
       stopScanner(false);
     }
