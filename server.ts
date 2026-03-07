@@ -34,7 +34,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 const upload = multer({ dest: UPLOADS_DIR });
 
 const TOKEN_PATH = path.join(APP_DATA_DIR, "drive-tokens.json");
-const TOKEN_MAX_AGE_DAYS = 60;
+const TOKEN_MAX_AGE_DAYS = 30;
 const OAUTH_CALLBACK_PATH = '/api/auth/google/callback';
 const LEGACY_OAUTH_CALLBACK_PATH = '/auth/callback';
 const GOOGLE_DRIVE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive";
@@ -45,6 +45,12 @@ type AdminDriveAuthData = {
   tokens: any;
   timestamp: number;
   redirectUri?: string;
+};
+
+type AdminOAuthStatus = {
+  data: AdminDriveAuthData | null;
+  expired: boolean;
+  expiresAt: string | null;
 };
 
 type GoogleServiceAccountCredentials = {
@@ -62,6 +68,10 @@ const unwrapEnvValue = (value?: string) => {
     ? trimmed.slice(1, -1)
     : trimmed;
 };
+
+const normalizeEmail = (value: unknown) => (
+  typeof value === "string" ? value.trim().toLowerCase() : ""
+);
 
 function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
   const credentialsFilePath = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_FILE);
@@ -127,29 +137,40 @@ function getMeetDelegatedUserFromEnv() {
   );
 }
 
-function readAdminDriveAuthData(): AdminDriveAuthData | null {
+function readStoredAdminDriveAuthData(): AdminDriveAuthData | null {
   if (!fs.existsSync(TOKEN_PATH)) {
     return null;
   }
 
   try {
-    const data = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')) as AdminDriveAuthData;
-    const ageInDays = (Date.now() - data.timestamp) / (1000 * 60 * 60 * 24);
-    if (ageInDays > TOKEN_MAX_AGE_DAYS) {
-      return null;
-    }
-    return data;
+    return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8')) as AdminDriveAuthData;
   } catch (e) {
     return null;
   }
 }
 
+function getAdminOAuthStatus(): AdminOAuthStatus {
+  const data = readStoredAdminDriveAuthData();
+  if (!data) {
+    return { data: null, expired: false, expiresAt: null };
+  }
+
+  const expiresAtMs = data.timestamp + TOKEN_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const expired = Date.now() > expiresAtMs;
+
+  return {
+    data: expired ? null : data,
+    expired,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+}
+
 function getAdminTokens() {
-  return readAdminDriveAuthData()?.tokens || null;
+  return getAdminOAuthStatus().data?.tokens || null;
 }
 
 function getAdminRedirectUri() {
-  return readAdminDriveAuthData()?.redirectUri || null;
+  return getAdminOAuthStatus().data?.redirectUri || null;
 }
 
 function saveAdminTokens(tokens: any, redirectUri: string) {
@@ -751,13 +772,22 @@ async function startServer() {
   app.post("/api/faculty", async (req, res) => {
     try {
       const { id, name, department_id, email, password } = req.body;
+      const normalizedEmail = normalizeEmail(email);
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      if (!normalizedEmail) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+      if (!emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({ error: "Invalid email format." });
+      }
       
       // Auto-generate a unique faculty code (e.g., FAC-A1B2C3)
       const faculty_code = "FAC-" + Math.random().toString(36).substring(2, 8).toUpperCase();
       
       const { data, error } = await getSupabase()
         .from("faculty")
-        .insert({ id, name, full_name: name, faculty_code, department_id, email, password, status: "available" })
+        .insert({ id, name, full_name: name, faculty_code, department_id, email: normalizedEmail, password, status: "available" })
         .select()
         .single();
       if (error) throw error;
@@ -791,18 +821,30 @@ async function startServer() {
   // Faculty Login
   app.post("/api/faculty/login", async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const normalizedEmail = normalizeEmail(req.body?.email);
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
+
+      if (!normalizedEmail) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+      if (!password.trim()) {
+        return res.status(400).json({ error: "Password is required." });
+      }
+
       const { data, error } = await getSupabase()
         .from("faculty")
         .select("*")
-        .eq("email", email)
         .eq("password", password)
-        .single();
+        .limit(50);
 
-      if (error || !data) {
+      if (error) throw error;
+
+      const facultyMatch = (data || []).find((faculty: any) => normalizeEmail(faculty.email) === normalizedEmail);
+
+      if (!facultyMatch) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
-      res.json(data);
+      res.json(facultyMatch);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1071,7 +1113,7 @@ async function startServer() {
   app.patch("/api/faculty/:id", async (req, res) => {
     try {
       const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+      const email = normalizeEmail(req.body?.email);
 
       if (!name) {
         return res.status(400).json({ error: "Faculty name is required." });
@@ -1167,19 +1209,41 @@ async function startServer() {
   // Get Queue for Faculty
   app.get("/api/faculty/:faculty_id/queue", async (req, res) => {
     try {
-      const { data, error } = await getSupabase()
+      let { data, error } = await getSupabase()
         .from("queue")
         .select(`
-          id, student_id, status, created_at, meet_link,
+          id, student_id, status, created_at, meet_link, purpose,
           students (full_name, student_number)
         `)
         .eq("faculty_id", req.params.faculty_id)
         .in("status", ["waiting", "next", "serving", "ongoing"])
         .order("created_at", { ascending: true });
 
+      if (error) {
+        const message = String(error.message || "").toLowerCase();
+        const missingPurposeColumn =
+          message.includes("purpose") &&
+          (message.includes("schema cache") || message.includes("column"));
+
+        if (missingPurposeColumn) {
+          const fallback = await getSupabase()
+            .from("queue")
+            .select(`
+              id, student_id, status, created_at, meet_link,
+              students (full_name, student_number)
+            `)
+            .eq("faculty_id", req.params.faculty_id)
+            .in("status", ["waiting", "next", "serving", "ongoing"])
+            .order("created_at", { ascending: true });
+
+          data = fallback.data as any;
+          error = fallback.error;
+        }
+      }
+
       if (error) throw error;
 
-      const formatted = data.map((c: any) => {
+      const formatted = (data || []).map((c: any) => {
         const parts = c.meet_link ? c.meet_link.split('|') : [];
         const time_period = parts.length > 1 ? parts[0] : (parts.length === 1 && !parts[0].startsWith('http') ? parts[0] : null);
         const actual_link = parts.length > 1 ? parts[1] : (parts.length === 1 && parts[0].startsWith('http') ? parts[0] : null);
@@ -1196,6 +1260,7 @@ async function startServer() {
           status: mappedStatus,
           student_name: c.students?.full_name,
           student_number: c.students?.student_number || "",
+          purpose: c.purpose || "",
           meet_link: actual_link,
           time_period: time_period
         };
@@ -1266,13 +1331,22 @@ async function startServer() {
       if (status === "completed" || status === "cancelled") dbStatus = "done";
 
       const updates: any = { status: dbStatus };
+      let finalMeetLink = typeof meet_link === "string" ? meet_link.trim() : "";
 
       if (status === "serving") {
-        if (meet_link) {
-          const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
-          const time_period = parts.length > 1 ? parts[0] : (parts.length === 1 && !parts[0].startsWith('http') ? parts[0] : null);
-          updates.meet_link = time_period ? `${time_period}|${meet_link}` : meet_link;
+        const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
+        const time_period = parts.length > 1 ? parts[0] : (parts.length === 1 && !parts[0].startsWith('http') ? parts[0] : null);
+        const existingMeetLink = parts.length > 1 ? parts[1] : (parts.length === 1 && parts[0].startsWith('http') ? parts[0] : null);
+
+        if (!finalMeetLink && existingMeetLink) {
+          finalMeetLink = existingMeetLink;
         }
+
+        if (!finalMeetLink) {
+          finalMeetLink = await createGoogleMeetLink(req);
+        }
+
+        updates.meet_link = time_period ? `${time_period}|${finalMeetLink}` : finalMeetLink;
         // Automatically set faculty to busy
         await getSupabase()
           .from("faculty")
@@ -1322,7 +1396,7 @@ async function startServer() {
       
       const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
       const actual_link = parts.length > 1 ? parts[1] : (parts.length === 1 && parts[0].startsWith('http') ? parts[0] : null);
-      const final_email_link = meet_link || actual_link;
+      const final_email_link = finalMeetLink || actual_link;
 
       if (targetEmail) {
         if (status === "serving") {
@@ -1360,7 +1434,7 @@ async function startServer() {
       }
 
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
-      res.json({ success: true });
+      res.json({ success: true, meet_link: final_email_link || null });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1636,9 +1710,10 @@ async function startServer() {
   });
 
   app.get("/api/drive/status", (_req, res) => {
+    const oauthStatus = getAdminOAuthStatus();
     const driveMode = getDriveConnectionMode();
     const meetMode = getMeetConnectionMode();
-    const oauthConnected = !!getAdminTokens();
+    const oauthConnected = !!oauthStatus.data;
 
     res.json({
       connected: driveMode !== "none",
@@ -1648,6 +1723,10 @@ async function startServer() {
       meetConnected: meetMode !== "none",
       meetMode,
       oauthConnected,
+      oauthExpired: oauthStatus.expired,
+      oauthExpiresAt: oauthStatus.expiresAt,
+      reconnectRequired: oauthStatus.expired && driveMode !== "service_account",
+      tokenMaxAgeDays: TOKEN_MAX_AGE_DAYS,
     });
   });
 

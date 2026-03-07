@@ -6,10 +6,13 @@ interface Consultation {
   id: number;
   student_id: string;
   student_name: string;
+  student_number?: string;
   status: "waiting" | "next" | "serving";
   created_at: string;
   source: string;
   meet_link?: string;
+  purpose?: string;
+  time_period?: string | null;
 }
 
 interface Faculty {
@@ -227,12 +230,12 @@ export default function FacultyDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, meet_link: link }),
       });
+
+      const payload = await res.json();
       
       if (!res.ok) {
-        const errData = await res.json();
-        console.error("Failed to update status:", errData);
-        alert(`Error updating status: ${errData.error}`);
-        return;
+        console.error("Failed to update status:", payload);
+        throw new Error(payload.error || "Failed to update consultation status.");
       }
       
       if (status === "completed" || status === "cancelled") {
@@ -254,35 +257,53 @@ export default function FacultyDashboard() {
       }
       
       fetchQueue();
+      return payload as { success: boolean; meet_link?: string | null };
     } catch (err) {
       console.error("Failed to update status", err);
+      throw err instanceof Error ? err : new Error("Failed to update consultation status.");
     }
   };
 
   const handleStartSession = async (id: number, existingLink?: string) => {
     let finalLink = existingLink || meetLinksByConsultation[id]?.trim() || "";
-    
-    if (!finalLink) {
-      alert("Please provide your Google Meet link before starting the consultation.");
-      return;
+    if (finalLink) {
+      finalLink = normalizeMeetLink(finalLink);
+
+      if (isMeetLinkAlreadyAssigned(id, finalLink)) {
+        alert("This Google Meet link is already assigned to another student. Please use a different link.");
+        return;
+      }
     }
 
-    finalLink = normalizeMeetLink(finalLink);
+    const sessionWindow = window.open("", "_blank");
 
-    if (isMeetLinkAlreadyAssigned(id, finalLink)) {
-      alert("This Google Meet link is already assigned to another student. Please use a different link.");
-      return;
+    try {
+      const data = await updateStatus(id, "serving", finalLink || undefined);
+      const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
+
+      if (!resolvedLink) {
+        sessionWindow?.close();
+        throw new Error("Google Meet link was not generated. Connect Google Meet in the Admin Dashboard and try again.");
+      }
+
+      setMeetLinksByConsultation((current) => ({
+        ...current,
+        [id]: resolvedLink,
+      }));
+
+      if (sessionWindow) {
+        sessionWindow.location.href = resolvedLink;
+      } else {
+        window.open(resolvedLink, "_blank");
+      }
+
+      await startAudioRecording();
+      fetchQueue();
+    } catch (err) {
+      sessionWindow?.close();
+      const message = err instanceof Error ? err.message : "Failed to start consultation.";
+      alert(message);
     }
-
-    setMeetLinksByConsultation((current) => ({
-      ...current,
-      [id]: finalLink,
-    }));
-    
-    window.open(finalLink, '_blank');
-    
-    await startAudioRecording();
-    updateStatus(id, "serving", finalLink);
   };
 
   const selectedFacultyData = faculty.find(f => f.id === selectedFaculty);
@@ -485,7 +506,9 @@ export default function FacultyDashboard() {
                       <h3 className="text-lg sm:text-xl font-bold text-neutral-900 truncate">
                         {student.student_name}
                       </h3>
-                      <p className="text-neutral-500 font-mono text-sm sm:text-base truncate">{student.student_id}</p>
+                      <p className="mt-1 text-sm sm:text-base text-neutral-600">
+                        <span className="font-semibold">Concern:</span> {student.purpose || "No concern provided."}
+                      </p>
                       <div className="flex flex-wrap items-center gap-2 mt-2 text-xs sm:text-sm text-neutral-400">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -520,16 +543,9 @@ export default function FacultyDashboard() {
                             </a>
                           </div>
                         ) : (
-                          <input
-                            type="text"
-                            placeholder="Paste Google Meet Link"
-                            value={meetLinksByConsultation[student.id] || ""}
-                            onChange={(e) => setMeetLinksByConsultation((current) => ({
-                              ...current,
-                              [student.id]: e.target.value,
-                            }))}
-                            className="px-4 py-3 sm:py-2 border border-neutral-300 rounded-xl text-sm w-full sm:w-64 focus:ring-2 focus:ring-indigo-500 outline-none"
-                          />
+                          <div className="px-3 py-2 rounded-xl text-sm w-full sm:w-64 border border-blue-100 bg-blue-50 text-blue-800">
+                            Google Meet link will be generated automatically when you start the consultation.
+                          </div>
                         )}
                         <div className="flex items-center gap-2 w-full">
                           <button

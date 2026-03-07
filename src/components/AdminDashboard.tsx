@@ -77,6 +77,9 @@ export default function AdminDashboard() {
   const [meetConnected, setMeetConnected] = useState(false);
   const [meetMode, setMeetMode] = useState<"service_account" | "oauth" | "none">("none");
   const [oauthConnected, setOauthConnected] = useState(false);
+  const [oauthExpired, setOauthExpired] = useState(false);
+  const [oauthExpiresAt, setOauthExpiresAt] = useState<string | null>(null);
+  const [tokenMaxAgeDays, setTokenMaxAgeDays] = useState(30);
   const [liveQueue, setLiveQueue] = useState<LiveQueueItem[]>([]);
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
 
@@ -144,6 +147,9 @@ export default function AdminDashboard() {
       setMeetConnected(Boolean(data.meetConnected));
       setMeetMode(data.meetMode || "none");
       setOauthConnected(Boolean(data.oauthConnected));
+      setOauthExpired(Boolean(data.oauthExpired));
+      setOauthExpiresAt(typeof data.oauthExpiresAt === "string" ? data.oauthExpiresAt : null);
+      setTokenMaxAgeDays(typeof data.tokenMaxAgeDays === "number" ? data.tokenMaxAgeDays : 30);
     } catch (err) {
       console.error("Failed to check drive status", err);
     }
@@ -256,9 +262,19 @@ export default function AdminDashboard() {
     }
   };
 
+  const googleExpiryLabel = oauthExpiresAt
+    ? new Date(oauthExpiresAt).toLocaleDateString([], {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
+    : null;
+
   const handleDisconnectDrive = async () => {
     if (!oauthConnected) {
-      if (driveMode === "service_account") {
+      if (oauthExpired) {
+        alert("Your Google OAuth session has expired. Reconnect Google to restore Drive uploads and Meet auto-links.");
+      } else if (driveMode === "service_account") {
         alert("Server-side Google integration is managed by environment variables. There is no admin OAuth connection to disconnect.");
       } else {
         alert("No admin Google OAuth connection is currently stored.");
@@ -797,6 +813,11 @@ export default function AdminDashboard() {
                     {driveMode === "service_account" ? "Drive Connected (Server)" : "Google Connected"}
                   </span>
                 </div>
+                {oauthConnected && googleExpiryLabel ? (
+                  <span className="px-3 py-1.5 bg-neutral-50 text-neutral-600 text-sm font-medium rounded-lg border border-neutral-200">
+                    Reconnect by {googleExpiryLabel}
+                  </span>
+                ) : null}
                 <span
                   className={`px-3 py-1.5 text-sm font-medium rounded-lg border ${
                     meetConnected
@@ -833,18 +854,25 @@ export default function AdminDashboard() {
                 )}
               </div>
             ) : (
-              <button
-                onClick={handleConnectDrive}
-                className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-neutral-50 text-neutral-600 rounded-lg border border-neutral-200 transition-colors"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M15.3 18.5H5.4L10.3 10L15.3 18.5Z" fill="#0066DA"/>
-                  <path d="M8.7 18.5H18.6L13.7 10L8.7 18.5Z" fill="#00AC47"/>
-                  <path d="M12 4.5L7.1 13H16.9L12 4.5Z" fill="#EA4335"/>
-                  <path d="M12 4.5L2.2 21.5H12L21.8 4.5H12Z" fill="#FFBA00"/>
-                </svg>
-                <span className="text-sm font-medium">Connect Google</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {oauthExpired ? (
+                  <span className="px-3 py-1.5 bg-amber-50 text-amber-700 text-sm font-medium rounded-lg border border-amber-100">
+                    Google session expired after {tokenMaxAgeDays} days
+                  </span>
+                ) : null}
+                <button
+                  onClick={handleConnectDrive}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-neutral-50 text-neutral-600 rounded-lg border border-neutral-200 transition-colors"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M15.3 18.5H5.4L10.3 10L15.3 18.5Z" fill="#0066DA"/>
+                    <path d="M8.7 18.5H18.6L13.7 10L8.7 18.5Z" fill="#00AC47"/>
+                    <path d="M12 4.5L7.1 13H16.9L12 4.5Z" fill="#EA4335"/>
+                    <path d="M12 4.5L2.2 21.5H12L21.8 4.5H12Z" fill="#FFBA00"/>
+                  </svg>
+                  <span className="text-sm font-medium">{oauthExpired ? "Reconnect Google" : "Connect Google"}</span>
+                </button>
+              </div>
             )}
           </div>
           <button

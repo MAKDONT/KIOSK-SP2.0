@@ -21,10 +21,11 @@ export default function StaffLogin() {
     setError("");
 
     try {
+      const normalizedEmail = email.trim();
       const res = await fetch("/api/faculty/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: normalizedEmail, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
@@ -66,6 +67,9 @@ export default function StaffLogin() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="faculty@school.edu"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
               required
             />
