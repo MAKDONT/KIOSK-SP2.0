@@ -132,21 +132,41 @@ export default function FacultyDashboard() {
   const [driveConnected, setDriveConnected] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  useEffect(() => {
-    const checkDriveStatus = async () => {
-      try {
-        const res = await fetch(`/api/drive/status`);
-        const data = await res.json();
-        setDriveConnected(data.connected);
-      } catch (err) {
-        console.error("Failed to check drive status", err);
+  const checkDriveStatus = async () => {
+    try {
+      const res = await fetch(`/api/drive/status`);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
       }
+      const data = await res.json();
+      const connected = Boolean(data.driveConnected ?? data.connected);
+      setDriveConnected(connected);
+      return connected;
+    } catch (err) {
+      console.error("Failed to check drive status", err);
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    void checkDriveStatus();
+
+    const refreshDriveStatus = () => {
+      void checkDriveStatus();
     };
-    checkDriveStatus();
+
+    window.addEventListener("focus", refreshDriveStatus);
+    const intervalId = window.setInterval(refreshDriveStatus, 30000);
+
+    return () => {
+      window.removeEventListener("focus", refreshDriveStatus);
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   const uploadToDrive = async (blob: Blob) => {
-    if (!driveConnected) {
+    const latestDriveStatus = await checkDriveStatus();
+    if (latestDriveStatus === false) {
       alert("Google Drive is not connected. Recording was not uploaded.");
       return;
     }
@@ -162,9 +182,17 @@ export default function FacultyDashboard() {
         body: formData
       });
       const data = await res.json();
-      if (!data.success) {
+      if (!res.ok || !data.success) {
+        if (
+          res.status === 401 ||
+          data.reconnectRequired ||
+          String(data.error || "").toLowerCase().includes("not connected")
+        ) {
+          setDriveConnected(false);
+        }
         throw new Error(data.hint ? `${data.error}\n${data.hint}` : data.error || "Upload failed");
       }
+      setDriveConnected(true);
       if (data.warning) {
         alert(data.warning);
       }
