@@ -449,7 +449,11 @@ async function startServer() {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          config: {
+            accessType: "OPEN",
+          },
+        }),
       });
 
       if (!response.ok) {

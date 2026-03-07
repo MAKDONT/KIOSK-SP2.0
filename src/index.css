@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
 body::before {
   content: "";
   position: fixed;
@@ -17,5 +32,12 @@ body::before {
   body::before {
     background-size: min(78vw, 360px);
     opacity: 0.05;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  body::before {
+    background-size: min(36vw, 240px);
+    opacity: 0.04;
   }
 }

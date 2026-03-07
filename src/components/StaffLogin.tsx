@@ -41,8 +41,8 @@ export default function StaffLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 space-y-8">
+    <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4 sm:p-6">
+      <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-6 sm:p-8 space-y-6 sm:space-y-8">
         <button
           onClick={() => navigate("/")}
           className="inline-flex items-center gap-2 text-neutral-500 hover:text-neutral-800 transition-colors"

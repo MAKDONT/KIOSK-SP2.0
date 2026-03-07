@@ -221,14 +221,14 @@ export default function KioskView() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-emerald-50 flex flex-col items-center justify-center p-8">
-        <div className="bg-white rounded-3xl shadow-2xl p-12 max-w-2xl w-full text-center space-y-8">
+      <div className="min-h-[100dvh] bg-emerald-50 flex flex-col items-center justify-center p-4 sm:p-6">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 sm:p-10 lg:p-12 max-w-2xl w-full text-center space-y-6 sm:space-y-8">
           <CheckCircle className="w-32 h-32 text-emerald-500 mx-auto" />
-          <h1 className="text-5xl font-bold text-neutral-900">Success!</h1>
-          <p className="text-2xl text-neutral-600">
+          <h1 className="text-4xl sm:text-5xl font-bold text-neutral-900">Success!</h1>
+          <p className="text-lg sm:text-2xl text-neutral-600">
             You have been added to the queue for {success.faculty_name || "the selected faculty"}.
           </p>
-          <p className="text-xl text-neutral-500">Redirecting to tracking page...</p>
+          <p className="text-base sm:text-xl text-neutral-500">Redirecting to tracking page...</p>
         </div>
       </div>
     );
@@ -237,15 +237,15 @@ export default function KioskView() {
   const availableFaculty = faculty;
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex flex-col font-sans">
+    <div className="min-h-[100dvh] bg-neutral-100 flex flex-col font-sans">
       {/* Header */}
-      <header className="bg-white shadow-sm p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 z-10">
-        <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto">
+      <header className="shrink-0 bg-white shadow-sm p-4 sm:p-5 lg:p-6 flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-center lg:justify-between z-10">
+        <div className="flex items-center gap-2 sm:gap-4 w-full lg:w-auto min-w-0">
           <button onClick={() => navigate("/")} className="p-2 sm:p-4 hover:bg-neutral-100 rounded-full transition-colors shrink-0">
             <ArrowLeft className="w-6 h-6 sm:w-8 sm:h-8 text-neutral-600" />
           </button>
           <Users className="w-8 h-8 sm:w-12 sm:h-12 text-indigo-600 shrink-0" />
-          <h1 className="text-xl sm:text-4xl font-bold text-neutral-900 tracking-tight truncate">
+          <h1 className="text-lg sm:text-3xl lg:text-4xl font-bold text-neutral-900 tracking-tight truncate">
             Student Booking Dashboard
           </h1>
           <div className="ml-2 sm:ml-4 flex items-center gap-2 px-2 sm:px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100 shrink-0">
@@ -256,24 +256,24 @@ export default function KioskView() {
             <span className="text-xs sm:text-sm font-bold uppercase tracking-wider hidden sm:inline-block">Live Updates</span>
           </div>
         </div>
-        <div className="text-lg sm:text-2xl font-medium text-neutral-500 flex items-center gap-2 w-full sm:w-auto justify-end">
-          <Clock className="w-6 h-6 sm:w-8 sm:h-8" />
+        <div className="text-base sm:text-lg lg:text-2xl font-medium text-neutral-500 flex items-center gap-2 w-full lg:w-auto justify-between lg:justify-end">
+          <Clock className="w-5 h-5 sm:w-6 sm:h-6 lg:w-8 lg:h-8" />
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        <div className="flex-1 p-4 sm:p-8 bg-neutral-50 flex flex-col overflow-hidden max-w-5xl mx-auto lg:mx-0">
-          <h2 className="text-2xl sm:text-3xl font-bold text-neutral-900 mb-6 sm:mb-8">Select Faculty & Time</h2>
+      <main className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-x-hidden">
+        <div className="flex-1 min-h-0 p-4 sm:p-6 lg:p-8 bg-neutral-50 flex flex-col overflow-hidden max-w-5xl w-full mx-auto lg:mx-0">
+          <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-neutral-900 mb-6 sm:mb-8">Select Faculty & Time</h2>
           
           {error && (
-            <div className="mb-8 flex items-center gap-3 text-red-600 bg-red-50 p-6 rounded-2xl text-xl font-medium border border-red-100">
-              <AlertCircle className="w-8 h-8 flex-shrink-0" />
+            <div className="mb-6 sm:mb-8 flex items-start gap-3 text-red-600 bg-red-50 p-4 sm:p-6 rounded-2xl text-base sm:text-lg lg:text-xl font-medium border border-red-100">
+              <AlertCircle className="w-6 h-6 sm:w-8 sm:h-8 flex-shrink-0" />
               {error}
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto pr-4 space-y-6">
+          <div className="flex-1 overflow-y-auto pr-0 sm:pr-2 lg:pr-4 space-y-4 sm:space-y-6">
             <AnimatePresence mode="popLayout">
               {fetching ? (
                 <motion.div
@@ -308,22 +308,22 @@ export default function KioskView() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    className={`bg-white rounded-3xl p-6 border-4 transition-all duration-500 ${
+                    className={`bg-white rounded-3xl p-4 sm:p-6 border-4 transition-all duration-500 ${
                       selectedFaculty === f.id
                         ? "border-indigo-500 shadow-lg"
                         : "border-transparent shadow-sm hover:shadow-md"
                     }`}
                   >
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <h3 className="text-3xl font-bold text-neutral-900 mb-2">{f.name}</h3>
-                        <p className="text-xl text-neutral-500">{f.department}</p>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-6">
+                      <div className="min-w-0">
+                        <h3 className="text-2xl sm:text-3xl font-bold text-neutral-900 mb-2 break-words">{f.name}</h3>
+                        <p className="text-base sm:text-xl text-neutral-500">{f.department}</p>
                       </div>
                       <motion.div 
                         key={f.status}
                         initial={{ scale: 0.8, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
-                        className={`px-4 py-2 rounded-full flex items-center gap-2 border ${
+                        className={`self-start px-3 sm:px-4 py-2 rounded-full flex items-center gap-2 border ${
                         f.status === 'available' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
                         f.status === 'busy' ? 'bg-red-50 border-red-200 text-red-700' : 
                         'bg-neutral-100 border-neutral-200 text-neutral-600'
@@ -332,7 +332,7 @@ export default function KioskView() {
                           f.status === 'available' ? 'bg-emerald-500' :
                           f.status === 'busy' ? 'bg-red-500' : 'bg-neutral-400'
                         }`} />
-                        <span className="text-lg font-bold uppercase tracking-wider">{f.status}</span>
+                        <span className="text-sm sm:text-base lg:text-lg font-bold uppercase tracking-wider">{f.status}</span>
                       </motion.div>
                     </div>
 
@@ -344,7 +344,7 @@ export default function KioskView() {
                       >
                         <div className="flex items-center gap-2">
                           <Calendar className="w-5 h-5" />
-                          <span className="text-lg font-medium">Available Slots Today</span>
+                          <span className="text-sm sm:text-lg font-medium">Available Slots Today</span>
                         </div>
                         {expandedFaculty === f.id ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                       </button>
@@ -357,7 +357,7 @@ export default function KioskView() {
                             exit={{ height: 0, opacity: 0, marginTop: 0 }}
                             className="overflow-hidden"
                           >
-                            <div className="flex flex-wrap gap-3">
+                            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
                               {(() => {
                                 const slots = getAvailabilitySlots(f);
                                 return (
@@ -377,7 +377,7 @@ export default function KioskView() {
                                               setSelectedTimePeriod(timeString);
                                             }
                                           }}
-                                          className={`flex-1 min-w-[200px] py-4 px-6 rounded-xl text-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                                          className={`w-full sm:flex-1 sm:min-w-[220px] py-3 sm:py-4 px-4 sm:px-6 rounded-xl text-sm sm:text-base lg:text-lg font-medium transition-all flex items-center justify-center gap-2 ${
                                             isDisabled
                                               ? "bg-neutral-100 text-neutral-400 cursor-not-allowed border border-neutral-200"
                                               : selectedFaculty === f.id && selectedTimePeriod === timeString
@@ -386,20 +386,20 @@ export default function KioskView() {
                                           }`}
                                         >
                                           <Clock className="w-5 h-5" /> {timeString}
-                                          {isBooked && <span className="text-sm ml-2">(Booked)</span>}
-                                          {isPast && !isBooked && <span className="text-sm ml-2">(Passed)</span>}
+                                          {isBooked && <span className="text-xs sm:text-sm ml-2">(Booked)</span>}
+                                          {isPast && !isBooked && <span className="text-xs sm:text-sm ml-2">(Passed)</span>}
                                         </button>
                                       );
                                     })}
                                     
                                     {f.status === 'busy' && slots.length === 0 && (
-                                      <div className="w-full py-4 text-center text-lg text-red-600 bg-red-50 rounded-xl font-medium">
+                                      <div className="w-full py-4 text-center text-sm sm:text-lg text-red-600 bg-red-50 rounded-xl font-medium">
                                         Currently in a consultation. Please wait or select another faculty.
                                       </div>
                                     )}
                                     
                                     {f.status === 'offline' && slots.length === 0 && (
-                                      <div className="w-full py-4 text-center text-lg text-neutral-500 bg-neutral-100 rounded-xl font-medium">
+                                      <div className="w-full py-4 text-center text-sm sm:text-lg text-neutral-500 bg-neutral-100 rounded-xl font-medium">
                                         Not available for booking at this time.
                                       </div>
                                     )}
@@ -417,9 +417,9 @@ export default function KioskView() {
             </AnimatePresence>
           </div>
 
-          <div className="pt-8 mt-auto border-t border-neutral-200">
+          <div className="pt-6 sm:pt-8 mt-auto border-t border-neutral-200">
             <div className="mb-5">
-              <label className="block text-lg font-semibold text-neutral-800 mb-2">
+              <label className="block text-base sm:text-lg font-semibold text-neutral-800 mb-2">
                 Consultation Concern <span className="text-red-500">*</span>
               </label>
               <textarea
@@ -434,7 +434,7 @@ export default function KioskView() {
             <button
               onClick={handleJoinQueue}
               disabled={loading || !studentId || !selectedFaculty || !selectedTimePeriod || !consultationConcern.trim()}
-              className="w-full py-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-300 disabled:text-neutral-500 disabled:cursor-not-allowed text-white text-3xl font-bold rounded-2xl shadow-xl transition-all active:scale-95 flex items-center justify-center gap-4"
+              className="w-full py-4 sm:py-5 lg:py-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-300 disabled:text-neutral-500 disabled:cursor-not-allowed text-white text-xl sm:text-2xl lg:text-3xl font-bold rounded-2xl shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 sm:gap-4"
             >
               {loading ? "Processing..." : "Confirm Booking"}
               {!loading && <CheckCircle className="w-8 h-8" />}
@@ -443,15 +443,15 @@ export default function KioskView() {
         </div>
 
         {/* Live Monitor Sidebar */}
-        <div className="w-full lg:w-96 bg-white border-l border-neutral-200 p-6 flex flex-col overflow-hidden">
-          <h2 className="text-2xl font-bold text-neutral-900 mb-6 flex items-center gap-2">
+        <div className="w-full lg:w-96 bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 p-4 sm:p-6 flex flex-col overflow-hidden max-h-[40dvh] lg:max-h-none">
+          <h2 className="text-xl sm:text-2xl font-bold text-neutral-900 mb-4 sm:mb-6 flex items-center gap-2 shrink-0">
             <span className="relative flex h-3 w-3">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
             </span>
             Live Monitor
           </h2>
-          <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+          <div className="flex-1 overflow-y-auto space-y-4 pr-0 sm:pr-2">
             {availableFaculty.filter(f => f.status === 'available').length === 0 ? (
               <div className="text-center py-8 text-neutral-500">
                 <Users className="w-12 h-12 text-neutral-300 mx-auto mb-3" />

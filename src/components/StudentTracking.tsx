@@ -36,10 +36,16 @@ export default function StudentTracking() {
     }
   };
 
+  const normalizeMeetingLink = (value?: string | null) => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed) return "";
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  };
+
   if (error) {
     return (
-      <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center space-y-4">
+      <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4 sm:p-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-md w-full text-center space-y-4">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto" />
           <h1 className="text-2xl font-bold text-neutral-900">Error</h1>
           <p className="text-neutral-500">{error}</p>
@@ -56,7 +62,7 @@ export default function StudentTracking() {
 
   if (!consultation) {
     return (
-      <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-4">
+      <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4">
         <div className="animate-spin text-emerald-600">
           <RefreshCw className="w-12 h-12" />
         </div>
@@ -64,9 +70,12 @@ export default function StudentTracking() {
     );
   }
 
+  const activeMeetLink = normalizeMeetingLink(consultation.meet_link);
+  const isEmbeddedRoom = activeMeetLink.includes("meet.jit.si");
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-emerald-50 flex flex-col items-center justify-center p-4 sm:p-6">
-      <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[2rem] shadow-2xl p-8 sm:p-10 max-w-md w-full space-y-8 text-center relative overflow-hidden">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-indigo-50 via-white to-emerald-50 flex flex-col items-center justify-center p-4 sm:p-6">
+      <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[2rem] shadow-2xl p-6 sm:p-10 max-w-lg w-full space-y-6 sm:space-y-8 text-center relative overflow-hidden">
         {/* Decorative background blur */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-32 bg-gradient-to-b from-indigo-500/10 to-transparent pointer-events-none" />
 
@@ -108,15 +117,19 @@ export default function StudentTracking() {
               <p className="text-amber-700/80 text-center max-w-[250px] mb-6">
                 Please get ready. The professor will start your session shortly.
               </p>
-              {consultation.meet_link && (
+              {activeMeetLink ? (
                 <a
-                  href={consultation.meet_link}
+                  href={activeMeetLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-center gap-3 w-full py-4 bg-amber-600 hover:bg-amber-700 text-white text-lg font-bold rounded-2xl shadow-[0_8px_30px_rgb(217,119,6,0.3)] transition-all hover:-translate-y-1 active:translate-y-0"
                 >
                   <Video className="w-6 h-6" /> Enter Virtual Room
                 </a>
+              ) : (
+                <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
+                  The faculty will provide your meeting link when the consultation starts.
+                </div>
               )}
             </div>
           )}
@@ -133,21 +146,36 @@ export default function StudentTracking() {
               <p className="text-emerald-700/80 text-center mb-8 max-w-[250px]">
                 Your consultation is starting.
               </p>
-              {/* Link Gating: Only visible when serving */}
-              {(() => {
-                const link = consultation.meet_link?.includes('meet.jit.si') 
-                  ? consultation.meet_link 
-                  : `https://meet.jit.si/EARIST_Queue_${consultation.id}`;
-                return (
-                  <div className="w-full h-[400px] rounded-2xl overflow-hidden shadow-lg border border-emerald-200">
+              {activeMeetLink ? (
+                isEmbeddedRoom ? (
+                  <div className="w-full min-h-[280px] sm:min-h-[360px] lg:min-h-[420px] rounded-2xl overflow-hidden shadow-lg border border-emerald-200">
                     <iframe 
-                      src={`${link}#config.prejoinPageEnabled=false`} 
+                      src={`${activeMeetLink}#config.prejoinPageEnabled=false`} 
                       allow="camera; microphone; display-capture; fullscreen; autoplay"
                       className="w-full h-full border-0 bg-neutral-900"
                     />
                   </div>
-                );
-              })()}
+                ) : (
+                  <div className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:p-6 text-left space-y-4">
+                    <p className="text-sm sm:text-base text-emerald-900">
+                      Your faculty is using an external meeting room for this consultation.
+                    </p>
+                    <a
+                      href={activeMeetLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center gap-3 w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white text-lg font-bold rounded-2xl shadow-[0_8px_30px_rgb(5,150,105,0.25)] transition-colors"
+                    >
+                      <Video className="w-6 h-6" /> Open Google Meet
+                    </a>
+                    <p className="break-all text-sm text-emerald-700">{activeMeetLink}</p>
+                  </div>
+                )
+              ) : (
+                <div className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-5 text-sm text-emerald-800">
+                  Your meeting link has not been added yet. Please wait for the faculty to start the consultation.
+                </div>
+              )}
             </div>
           )}
 

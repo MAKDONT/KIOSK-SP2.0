@@ -406,17 +406,17 @@ export default function Login() {
   const activeStudents = [...servingStudents, ...nextStudents, ...waitingStudents];
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex flex-col lg:flex-row">
+    <div className="min-h-[100dvh] bg-neutral-100 flex flex-col lg:flex-row">
       {/* Faculty Sidebar (Left) */}
-      <div className="order-2 lg:order-1 w-full lg:w-[340px] bg-white border-t lg:border-t-0 lg:border-r border-neutral-200 p-6 flex flex-col overflow-hidden shadow-lg z-10">
-        <h2 className="text-2xl font-bold text-neutral-900 mb-6 flex items-center gap-2">
+      <div className="order-2 lg:order-1 w-full lg:w-[340px] max-h-[32dvh] sm:max-h-[24rem] lg:max-h-none bg-white border-t lg:border-t-0 lg:border-r border-neutral-200 p-4 sm:p-6 flex flex-col overflow-hidden shadow-lg z-10 shrink-0">
+        <h2 className="text-xl sm:text-2xl font-bold text-neutral-900 mb-4 sm:mb-6 flex items-center gap-2 shrink-0">
           <span className="relative flex h-3 w-3">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
           </span>
           Available Faculty
         </h2>
-        <div className="flex-1 overflow-y-auto pr-2">
+        <div className="flex-1 overflow-y-auto pr-0 sm:pr-2">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-neutral-600 uppercase tracking-wider">Faculty</h3>
               <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
@@ -446,8 +446,8 @@ export default function Login() {
       </div>
 
       {/* Login Form (Center) */}
-      <div className="order-1 lg:order-2 flex-1 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 space-y-8">
+      <div className="order-1 lg:order-2 flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8 min-h-0">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-6 sm:p-8 space-y-6 sm:space-y-8">
           <div className="text-center space-y-2">
             <h1 className="text-3xl font-bold text-neutral-900 tracking-tight">
               Welcome Back
@@ -480,7 +480,7 @@ export default function Login() {
 
               {inputMode === "scan" ? (
                 <div className="space-y-4">
-                  <div className="w-full h-32 border-2 border-dashed border-emerald-300 rounded-2xl flex flex-col items-center justify-center bg-emerald-50 text-emerald-500 animate-pulse">
+                  <div className="w-full h-28 sm:h-32 border-2 border-dashed border-emerald-300 rounded-2xl flex flex-col items-center justify-center bg-emerald-50 text-emerald-500 animate-pulse">
                     <ScanLine className="w-10 h-10 mb-2" />
                     <span className="text-sm font-bold">Scan ID Here</span>
                   </div>
@@ -561,16 +561,16 @@ export default function Login() {
       </div>
 
       {/* Students Queue Sidebar (Right) */}
-      <div className="order-3 lg:order-3 w-full lg:w-[340px] bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 p-6 flex flex-col overflow-hidden shadow-lg z-10">
-        <h2 className="text-2xl font-bold text-neutral-900 mb-6 flex items-center gap-2">
+      <div className="order-3 lg:order-3 w-full lg:w-[340px] max-h-[32dvh] sm:max-h-[24rem] lg:max-h-none bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 p-4 sm:p-6 flex flex-col overflow-hidden shadow-lg z-10 shrink-0">
+        <h2 className="text-xl sm:text-2xl font-bold text-neutral-900 mb-4 sm:mb-6 flex items-center gap-2 shrink-0">
           <span className="relative flex h-3 w-3">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
           </span>
           Students Queue
         </h2>
-        <div className="flex-1 overflow-y-auto pr-2">
-          <div className="flex items-center justify-between mb-3">
+        <div className="flex-1 overflow-y-auto pr-0 sm:pr-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
             <h3 className="text-sm font-bold text-neutral-600 uppercase tracking-wider">Live Queue</h3>
             <div className="flex items-center gap-1.5 text-xs">
               <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">Now {servingStudents.length}</span>

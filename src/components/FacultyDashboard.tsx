@@ -29,6 +29,7 @@ export default function FacultyDashboard() {
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [queue, setQueue] = useState<Consultation[]>([]);
   const [meetLinksByConsultation, setMeetLinksByConsultation] = useState<Record<number, string>>({});
+  const [manualMeetFallbackOpen, setManualMeetFallbackOpen] = useState<Record<number, boolean>>({});
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [availabilitySlots, setAvailabilitySlots] = useState<{day: string, start: string, end: string}[]>([]);
 
@@ -70,6 +71,20 @@ export default function FacultyDashboard() {
           next[consultation.id] = consultation.meet_link;
         } else if (current[consultation.id]) {
           next[consultation.id] = current[consultation.id];
+        }
+      }
+
+      return next;
+    });
+  }, [queue]);
+
+  useEffect(() => {
+    setManualMeetFallbackOpen((current) => {
+      const next: Record<number, boolean> = {};
+
+      for (const consultation of queue) {
+        if (current[consultation.id]) {
+          next[consultation.id] = true;
         }
       }
 
@@ -215,11 +230,16 @@ export default function FacultyDashboard() {
     if (!normalizedCandidate) return false;
 
     return queue.some((consultation) => {
-      if (consultation.id === consultationId || !consultation.meet_link) {
+      if (consultation.id === consultationId) {
         return false;
       }
 
-      return normalizeMeetLink(consultation.meet_link).toLowerCase() === normalizedCandidate;
+      const assignedLink = consultation.meet_link || meetLinksByConsultation[consultation.id] || "";
+      if (!assignedLink) {
+        return false;
+      }
+
+      return normalizeMeetLink(assignedLink).toLowerCase() === normalizedCandidate;
     });
   };
 
@@ -265,25 +285,29 @@ export default function FacultyDashboard() {
   };
 
   const handleStartSession = async (id: number, existingLink?: string) => {
-    let finalLink = existingLink || meetLinksByConsultation[id]?.trim() || "";
-    if (finalLink) {
-      finalLink = normalizeMeetLink(finalLink);
+    const draftLink = meetLinksByConsultation[id]?.trim() || "";
+    let finalLink = draftLink || existingLink || "";
+
+    if (draftLink) {
+      finalLink = normalizeMeetLink(draftLink);
 
       if (isMeetLinkAlreadyAssigned(id, finalLink)) {
         alert("This Google Meet link is already assigned to another student. Please use a different link.");
         return;
       }
+    } else if (existingLink) {
+      finalLink = normalizeMeetLink(existingLink);
     }
 
     const sessionWindow = window.open("", "_blank");
 
     try {
-      const data = await updateStatus(id, "serving", finalLink || undefined);
+      const data = await updateStatus(id, "serving", draftLink ? finalLink : undefined);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
         sessionWindow?.close();
-        throw new Error("Google Meet link was not generated. Connect Google Meet in the Admin Dashboard and try again.");
+        throw new Error("Google Meet link was not generated. Add a manual Google Meet link and try again.");
       }
 
       setMeetLinksByConsultation((current) => ({
@@ -301,7 +325,15 @@ export default function FacultyDashboard() {
       fetchQueue();
     } catch (err) {
       sessionWindow?.close();
-      const message = err instanceof Error ? err.message : "Failed to start consultation.";
+      setManualMeetFallbackOpen((current) => ({
+        ...current,
+        [id]: true,
+      }));
+
+      const baseMessage = err instanceof Error ? err.message : "Failed to start consultation.";
+      const message = draftLink
+        ? baseMessage
+        : `${baseMessage}\nIf Google is not connected, paste a manual Google Meet link and try again.`;
       alert(message);
     }
   };
@@ -385,8 +417,8 @@ export default function FacultyDashboard() {
   const timeOptions = generateTimeOptions();
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex flex-col">
-      <header className="bg-white shadow-sm p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div className="min-h-[100dvh] bg-neutral-100 flex flex-col">
+      <header className="shrink-0 bg-white shadow-sm p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-start">
           <div className="flex items-center gap-3">
             <Users className="w-8 h-8 text-indigo-600" />
@@ -429,14 +461,14 @@ export default function FacultyDashboard() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 sm:p-8 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+      <main className="flex-1 min-h-0 p-4 sm:p-6 xl:p-8 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
         {/* Active Session Virtual Room */}
         {queue.find(q => q.status === "serving") && (() => {
           const activeSession = queue.find(q => q.status === "serving")!;
           return (
-            <div className="lg:col-span-3 mb-2 bg-white rounded-2xl p-4 shadow-sm border border-neutral-200 flex flex-col h-[600px]">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-neutral-900 flex items-center gap-2">
+            <div className="lg:col-span-3 mb-2 bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-neutral-200 flex flex-col min-h-[360px] sm:min-h-[440px] xl:min-h-[520px]">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
+                <h2 className="text-lg sm:text-xl font-bold text-neutral-900 flex items-center gap-2">
                   <Video className="w-6 h-6 text-indigo-600" />
                   Active Consultation: {activeSession.student_name}
                 </h2>
@@ -450,7 +482,7 @@ export default function FacultyDashboard() {
                 </div>
               </div>
               
-              <div className="flex-1 flex flex-col items-center justify-center bg-neutral-50 rounded-xl border-2 border-dashed border-neutral-200 p-8 text-center">
+              <div className="flex-1 flex flex-col items-center justify-center bg-neutral-50 rounded-xl border-2 border-dashed border-neutral-200 p-6 sm:p-8 text-center">
                 <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mb-4">
                   <Video className="w-8 h-8 text-indigo-600" />
                 </div>
@@ -462,7 +494,7 @@ export default function FacultyDashboard() {
                   href={activeSession.meet_link} 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors shadow-sm inline-flex items-center gap-2"
+                  className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors shadow-sm inline-flex items-center justify-center gap-2"
                 >
                   <Video className="w-5 h-5" /> Re-open Google Meet
                 </a>
@@ -472,10 +504,10 @@ export default function FacultyDashboard() {
         })()}
 
         {/* Queue List */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold text-neutral-900">Live Queue (FIFO)</h2>
-            <span className="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full font-medium">
+        <div className="lg:col-span-2 space-y-4 sm:space-y-6 min-h-0">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Live Queue (FIFO)</h2>
+            <span className="w-fit px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full font-medium">
               {queue.length} Students Waiting
             </span>
           </div>
@@ -531,7 +563,7 @@ export default function FacultyDashboard() {
                     {(student.status === "waiting" || student.status === "next") && (
                       <div className="flex flex-col gap-2 items-stretch sm:items-end w-full sm:w-auto">
                         {student.meet_link ? (
-                          <div className="flex items-center gap-2 bg-indigo-50 px-3 py-2 rounded-xl text-sm w-full sm:w-64 border border-indigo-100">
+                          <div className="flex items-center gap-2 bg-indigo-50 px-3 py-2 rounded-xl text-sm w-full sm:w-72 border border-indigo-100">
                             <Video className="w-4 h-4 text-indigo-500 shrink-0" />
                             <a 
                               href={student.meet_link} 
@@ -543,10 +575,43 @@ export default function FacultyDashboard() {
                             </a>
                           </div>
                         ) : (
-                          <div className="px-3 py-2 rounded-xl text-sm w-full sm:w-64 border border-blue-100 bg-blue-50 text-blue-800">
+                          <div className="px-3 py-2 rounded-xl text-sm w-full sm:w-72 border border-blue-100 bg-blue-50 text-blue-800">
                             Google Meet link will be generated automatically when you start the consultation.
                           </div>
                         )}
+                        <div className="w-full sm:w-72 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setManualMeetFallbackOpen((current) => ({
+                                ...current,
+                                [student.id]: !current[student.id],
+                              }))
+                            }
+                            className="w-full px-4 py-2 border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 text-sm font-medium rounded-xl transition-colors"
+                          >
+                            {manualMeetFallbackOpen[student.id] ? "Hide Manual Meet Fallback" : "Use Manual Meet Link Instead"}
+                          </button>
+                          {manualMeetFallbackOpen[student.id] && (
+                            <>
+                              <input
+                                type="text"
+                                placeholder="Paste manual Google Meet link"
+                                value={meetLinksByConsultation[student.id] ?? ""}
+                                onChange={(e) =>
+                                  setMeetLinksByConsultation((current) => ({
+                                    ...current,
+                                    [student.id]: e.target.value,
+                                  }))
+                                }
+                                className="w-full px-4 py-3 sm:py-2 border border-neutral-300 rounded-xl text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                              />
+                              <p className="text-xs text-neutral-500 sm:text-right">
+                                Emergency fallback if Google Meet auto-linking is unavailable.
+                              </p>
+                            </>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 w-full">
                           <button
                             onClick={() => handleStartSession(student.id, student.meet_link)}
@@ -583,7 +648,7 @@ export default function FacultyDashboard() {
         </div>
 
         {/* Sidebar / Stats */}
-        <div className="space-y-6">
+        <div className="space-y-6 xl:sticky xl:top-6 self-start">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-neutral-200">
             <h3 className="text-lg font-bold text-neutral-900 mb-4">Session Controls</h3>
             {selectedFacultyData ? (
@@ -655,21 +720,21 @@ export default function FacultyDashboard() {
       </main>
 
       {showAvailabilityModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-t-[2rem] sm:rounded-3xl p-5 sm:p-8 max-w-2xl w-full max-h-[90dvh] shadow-2xl flex flex-col">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold text-neutral-900">Consultation Hours</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Consultation Hours</h2>
               <button onClick={() => setShowAvailabilityModal(false)} className="text-neutral-400 hover:text-neutral-600">
                 <XCircle className="w-6 h-6" />
               </button>
             </div>
             
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1 sm:pr-2">
               {availabilitySlots.length === 0 ? (
                 <p className="text-neutral-500 text-center py-8">No time slots set. Add your available hours below.</p>
               ) : (
                 availabilitySlots.map((slot, index) => (
-                  <div key={index} className="flex items-center gap-4 bg-neutral-50 p-4 rounded-xl">
+                  <div key={index} className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 bg-neutral-50 p-4 rounded-xl">
                     <select
                       value={slot.day}
                       onChange={(e) => updateSlot(index, "day", e.target.value)}
@@ -709,14 +774,14 @@ export default function FacultyDashboard() {
               )}
             </div>
 
-            <div className="mt-6 flex justify-between items-center pt-6 border-t border-neutral-100">
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center pt-6 border-t border-neutral-100">
               <button
                 onClick={addSlot}
                 className="px-6 py-3 bg-indigo-50 text-indigo-700 font-medium rounded-xl hover:bg-indigo-100 transition-colors"
               >
                 + Add Time Slot
               </button>
-              <div className="flex gap-4">
+              <div className="flex flex-col-reverse sm:flex-row gap-3 sm:gap-4">
                 <button
                   onClick={() => setShowAvailabilityModal(false)}
                   className="px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors"
