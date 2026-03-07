@@ -1584,8 +1584,7 @@ async function startServer() {
     );
   };
 
-  // Cleanup old recordings after 48 hours
-  setInterval(async () => {
+  const runDriveCleanup = async () => {
     if (getDriveConnectionMode() === "none") return;
     
     let activeMode: "service_account" | "oauth" | "none" = "none";
@@ -1616,7 +1615,31 @@ async function startServer() {
         fs.unlinkSync(TOKEN_PATH);
       }
     }
-  }, 60 * 60 * 1000); // Run every hour
+  };
+
+  const getMsUntilNextDriveCleanup = () => {
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setHours(23, 59, 0, 0);
+
+    if (nextRun.getTime() <= now.getTime()) {
+      nextRun.setDate(nextRun.getDate() + 1);
+    }
+
+    return nextRun.getTime() - now.getTime();
+  };
+
+  const scheduleDriveCleanup = () => {
+    const delay = getMsUntilNextDriveCleanup();
+    console.log(`[Drive Cleanup] Next run scheduled in ${Math.round(delay / 60000)} minutes.`);
+
+    setTimeout(async () => {
+      await runDriveCleanup();
+      scheduleDriveCleanup();
+    }, delay);
+  };
+
+  scheduleDriveCleanup();
 
   app.get("/api/auth/google/url", (req, res) => {
     try {

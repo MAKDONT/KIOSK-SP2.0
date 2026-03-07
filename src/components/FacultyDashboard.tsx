@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut } from "lucide-react";
 
@@ -32,6 +32,11 @@ export default function FacultyDashboard() {
   const [manualMeetFallbackOpen, setManualMeetFallbackOpen] = useState<Record<number, boolean>>({});
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [availabilitySlots, setAvailabilitySlots] = useState<{day: string, start: string, end: string}[]>([]);
+  const sessionWindowRef = useRef<Window | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const mixedAudioContextRef = useRef<AudioContext | null>(null);
+  const discardRecordingOnStopRef = useRef(false);
 
   useEffect(() => {
     if (localStorage.getItem("user_role") !== "staff") {
@@ -164,6 +169,37 @@ export default function FacultyDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (sessionWindowRef.current && !sessionWindowRef.current.closed) {
+        sessionWindowRef.current.close();
+      }
+      sessionWindowRef.current = null;
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+      displayStreamRef.current?.getTracks().forEach((track) => track.stop());
+      void mixedAudioContextRef.current?.close();
+      microphoneStreamRef.current = null;
+      displayStreamRef.current = null;
+      mixedAudioContextRef.current = null;
+    };
+  }, []);
+
+  const closeSessionWindow = () => {
+    if (sessionWindowRef.current && !sessionWindowRef.current.closed) {
+      sessionWindowRef.current.close();
+    }
+    sessionWindowRef.current = null;
+  };
+
+  const cleanupRecordingResources = () => {
+    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    displayStreamRef.current?.getTracks().forEach((track) => track.stop());
+    void mixedAudioContextRef.current?.close();
+    microphoneStreamRef.current = null;
+    displayStreamRef.current = null;
+    mixedAudioContextRef.current = null;
+  };
+
   const uploadToDrive = async (blob: Blob) => {
     const latestDriveStatus = await checkDriveStatus();
     if (latestDriveStatus === false) {
@@ -206,38 +242,109 @@ export default function FacultyDashboard() {
   };
 
   const startAudioRecording = async () => {
+    cleanupRecordingResources();
+    discardRecordingOnStopRef.current = false;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false
+      let microphoneStream: MediaStream | null = null;
+      let displayStream: MediaStream | null = null;
+
+      try {
+        microphoneStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false
+        });
+        microphoneStreamRef.current = microphoneStream;
+      } catch (micErr) {
+        console.warn("Microphone capture unavailable:", micErr);
+      }
+
+      if (navigator.mediaDevices.getDisplayMedia) {
+        try {
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            audio: true,
+            video: true,
+          });
+          displayStreamRef.current = displayStream;
+        } catch (displayErr) {
+          console.warn("Meeting audio capture unavailable:", displayErr);
+        }
+      }
+
+      const audioContext = new AudioContext();
+      mixedAudioContextRef.current = audioContext;
+      const destination = audioContext.createMediaStreamDestination();
+
+      const connectAudioStream = (stream: MediaStream | null) => {
+        if (!stream || stream.getAudioTracks().length === 0) {
+          return false;
+        }
+
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(destination);
+        return true;
+      };
+
+      const hasMicrophoneAudio = connectAudioStream(microphoneStream);
+      const hasDisplayAudio = connectAudioStream(displayStream);
+
+      if (!hasMicrophoneAudio && !hasDisplayAudio) {
+        throw new Error("No audio source was shared for recording.");
+      }
+
+      if (!MediaRecorder.isTypeSupported("audio/webm;codecs=opus") && !MediaRecorder.isTypeSupported("audio/webm")) {
+        throw new Error("This browser does not support WebM audio recording.");
+      }
+
+      const recorder = new MediaRecorder(destination.stream, {
+        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm",
       });
-      
-      const recorder = new MediaRecorder(stream);
       const chunks: BlobPart[] = [];
       
       recorder.ondataavailable = (e) => chunks.push(e.data);
       recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
         setMediaRecorder(null);
-        
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
+        const shouldDiscard = discardRecordingOnStopRef.current;
+        discardRecordingOnStopRef.current = false;
+        cleanupRecordingResources();
 
+        if (shouldDiscard) {
+          return;
+        }
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
         await uploadToDrive(blob);
       };
       
       recorder.start();
       setMediaRecorder(recorder);
-      
-      // Handle user stopping microphone via browser UI
-      stream.getAudioTracks()[0].onended = () => {
+
+      const stopRecorderIfActive = () => {
         if (recorder.state === 'recording') {
           recorder.stop();
         }
       };
+
+      microphoneStream?.getAudioTracks().forEach((track) => {
+        track.onended = stopRecorderIfActive;
+      });
+
+      displayStream?.getTracks().forEach((track) => {
+        track.onended = stopRecorderIfActive;
+      });
+
+      if (!hasDisplayAudio) {
+        alert("Meeting audio can only be recorded if you choose the Google Meet tab or window and enable audio sharing. This session will record the microphone only.");
+      }
     } catch (err) {
+      cleanupRecordingResources();
       console.error("Error starting audio recording:", err);
-      alert("Could not start audio recording. Please ensure you have granted microphone permissions.");
+      const message = err instanceof Error
+        ? err.message
+        : "Could not start audio recording.";
+      alert(`${message} Please ensure you have granted microphone permission and, if needed, shared the Google Meet tab/window audio.`);
     }
   };
 
@@ -288,6 +395,7 @@ export default function FacultyDashboard() {
       
       if (status === "completed" || status === "cancelled") {
         stopAudioRecording();
+        closeSessionWindow();
       }
       
       if (autoCallNext && (status === "completed" || status === "cancelled")) {
@@ -327,14 +435,20 @@ export default function FacultyDashboard() {
       finalLink = normalizeMeetLink(existingLink);
     }
 
-    const sessionWindow = window.open("", "_blank");
+    closeSessionWindow();
+    const sessionWindow = window.open(finalLink || "", "_blank");
+    sessionWindowRef.current = sessionWindow;
 
     try {
+      if (finalLink) {
+        await startAudioRecording();
+      }
+
       const data = await updateStatus(id, "serving", draftLink ? finalLink : undefined);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
-        sessionWindow?.close();
+        closeSessionWindow();
         throw new Error("Google Meet link was not generated. Add a manual Google Meet link and try again.");
       }
 
@@ -346,13 +460,17 @@ export default function FacultyDashboard() {
       if (sessionWindow) {
         sessionWindow.location.href = resolvedLink;
       } else {
-        window.open(resolvedLink, "_blank");
+        sessionWindowRef.current = window.open(resolvedLink, "_blank");
       }
 
-      await startAudioRecording();
+      if (!finalLink) {
+        await startAudioRecording();
+      }
       fetchQueue();
     } catch (err) {
-      sessionWindow?.close();
+      discardRecordingOnStopRef.current = true;
+      stopAudioRecording();
+      closeSessionWindow();
       setManualMeetFallbackOpen((current) => ({
         ...current,
         [id]: true,
