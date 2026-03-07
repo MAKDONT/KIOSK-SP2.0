@@ -144,6 +144,7 @@ export default function FacultyDashboard() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordingStorageReady, setRecordingStorageReady] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [startingSessionId, setStartingSessionId] = useState<number | null>(null);
 
   const checkRecordingStorageStatus = async () => {
     try {
@@ -198,6 +199,65 @@ export default function FacultyDashboard() {
       sessionWindowRef.current.close();
     }
     sessionWindowRef.current = null;
+  };
+
+  const prepareSessionWindow = () => {
+    closeSessionWindow();
+
+    const sessionWindow = window.open("", "_blank");
+    sessionWindowRef.current = sessionWindow;
+    if (!sessionWindow) {
+      return null;
+    }
+
+    try {
+      sessionWindow.document.title = "Preparing Google Meet";
+      sessionWindow.document.body.innerHTML = `
+        <main style="font-family: Arial, sans-serif; padding: 32px; color: #171717; background: #f5f5f5;">
+          <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e5e5; border-radius: 16px; padding: 24px;">
+            <h1 style="margin: 0 0 12px; font-size: 20px;">Preparing Google Meet</h1>
+            <p style="margin: 0; line-height: 1.5;">
+              Return to the faculty dashboard and finish the recording permission prompt. This tab will load Google Meet once the consultation starts.
+            </p>
+          </div>
+        </main>
+      `;
+    } catch (err) {
+      console.warn("Failed to render Meet placeholder tab", err);
+    }
+
+    sessionWindow.blur();
+    window.focus();
+    return sessionWindow;
+  };
+
+  const openPreparedSessionWindow = (meetLink: string) => {
+    if (!meetLink) {
+      return;
+    }
+
+    const sessionWindow = sessionWindowRef.current;
+    if (sessionWindow && !sessionWindow.closed) {
+      sessionWindow.location.href = meetLink;
+      sessionWindow.focus();
+      return;
+    }
+
+    sessionWindowRef.current = window.open(meetLink, "_blank");
+  };
+
+  const focusSessionWindow = (meetLink: string) => {
+    if (!meetLink) {
+      return;
+    }
+
+    const sessionWindow = sessionWindowRef.current;
+    if (sessionWindow && !sessionWindow.closed) {
+      sessionWindow.focus();
+      return;
+    }
+
+    sessionWindowRef.current = window.open(meetLink, "_blank");
   };
 
   const cleanupRecordingResources = () => {
@@ -355,7 +415,7 @@ export default function FacultyDashboard() {
       const message = err instanceof Error
         ? err.message
         : "Could not start audio recording.";
-      alert(`${message} Please ensure you have granted microphone permission and, if needed, shared the Google Meet tab/window audio.`);
+      throw new Error(`${message} Please ensure you have granted microphone permission and, if needed, shared the Google Meet tab/window audio.`);
     }
   };
 
@@ -432,6 +492,8 @@ export default function FacultyDashboard() {
   };
 
   const handleStartSession = async (id: number, existingLink?: string) => {
+    if (startingSessionId !== null) return;
+
     const draftLink = meetLinksByConsultation[id]?.trim() || "";
     let finalLink = draftLink || existingLink || "";
     const currentConsultation = queue.find((consultation) => consultation.id === id);
@@ -455,14 +517,11 @@ export default function FacultyDashboard() {
       finalLink = normalizeMeetLink(existingLink);
     }
 
-    closeSessionWindow();
-    const sessionWindow = window.open(finalLink || "", "_blank");
-    sessionWindowRef.current = sessionWindow;
+    setStartingSessionId(id);
+    prepareSessionWindow();
 
     try {
-      if (finalLink) {
-        await startAudioRecording(recordingContext);
-      }
+      await startAudioRecording(recordingContext);
 
       const data = await updateStatus(id, "serving", draftLink ? finalLink : undefined);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
@@ -477,15 +536,7 @@ export default function FacultyDashboard() {
         [id]: resolvedLink,
       }));
 
-      if (sessionWindow) {
-        sessionWindow.location.href = resolvedLink;
-      } else {
-        sessionWindowRef.current = window.open(resolvedLink, "_blank");
-      }
-
-      if (!finalLink) {
-        await startAudioRecording(recordingContext);
-      }
+      openPreparedSessionWindow(resolvedLink);
       fetchQueue();
     } catch (err) {
       discardRecordingOnStopRef.current = true;
@@ -501,6 +552,8 @@ export default function FacultyDashboard() {
         ? baseMessage
         : `${baseMessage}\nIf Google is not connected, paste a manual Google Meet link and try again.`;
       alert(message);
+    } finally {
+      setStartingSessionId(null);
     }
   };
 
@@ -654,16 +707,15 @@ export default function FacultyDashboard() {
                 </div>
                 <h3 className="text-xl font-bold text-neutral-900 mb-2">Consultation in Progress</h3>
                 <p className="text-neutral-500 max-w-md mb-6">
-                  The consultation is happening in a separate Google Meet window. The audio is currently being recorded.
+                  Recording is active. Open Google Meet from here when you are ready, and use this link again anytime you need to return to the room.
                 </p>
-                <a 
-                  href={activeSession.meet_link} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={() => focusSessionWindow(activeSession.meet_link || "")}
                   className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors shadow-sm inline-flex items-center justify-center gap-2"
                 >
-                  <Video className="w-5 h-5" /> Re-open Google Meet
-                </a>
+                  <Video className="w-5 h-5" /> Go To Google Meet
+                </button>
               </div>
             </div>
           );
@@ -781,9 +833,14 @@ export default function FacultyDashboard() {
                         <div className="flex items-center gap-2 w-full">
                           <button
                             onClick={() => handleStartSession(student.id, student.meet_link)}
-                            className="flex items-center gap-2 px-4 py-3 sm:py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl transition-colors w-full justify-center"
+                            disabled={startingSessionId !== null}
+                            className={`flex items-center gap-2 px-4 py-3 sm:py-2 text-white font-medium rounded-xl transition-colors w-full justify-center ${
+                              startingSessionId !== null
+                                ? "bg-emerald-400 cursor-not-allowed"
+                                : "bg-emerald-600 hover:bg-emerald-700"
+                            }`}
                           >
-                            <Video className="w-4 h-4" /> Start Consultation
+                            <Video className="w-4 h-4" /> {startingSessionId === student.id ? "Granting Permissions..." : "Start Consultation"}
                           </button>
                           <button
                             onClick={() => updateStatus(student.id, "completed", undefined, true)}
