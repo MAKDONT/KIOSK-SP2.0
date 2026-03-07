@@ -313,30 +313,21 @@ export default function FacultyDashboard() {
     recordingContextRef.current = recordingContext;
 
     try {
-      let microphoneStream: MediaStream | null = null;
-      let displayStream: MediaStream | null = null;
+      const microphoneStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+      microphoneStreamRef.current = microphoneStream;
 
-      try {
-        microphoneStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: false
-        });
-        microphoneStreamRef.current = microphoneStream;
-      } catch (micErr) {
-        console.warn("Microphone capture unavailable:", micErr);
+      if (!navigator.mediaDevices.getDisplayMedia) {
+        throw new Error("This browser does not support Google Meet audio capture.");
       }
 
-      if (navigator.mediaDevices.getDisplayMedia) {
-        try {
-          displayStream = await navigator.mediaDevices.getDisplayMedia({
-            audio: true,
-            video: true,
-          });
-          displayStreamRef.current = displayStream;
-        } catch (displayErr) {
-          console.warn("Meeting audio capture unavailable:", displayErr);
-        }
-      }
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: true,
+      });
+      displayStreamRef.current = displayStream;
 
       const audioContext = new AudioContext();
       mixedAudioContextRef.current = audioContext;
@@ -355,8 +346,12 @@ export default function FacultyDashboard() {
       const hasMicrophoneAudio = connectAudioStream(microphoneStream);
       const hasDisplayAudio = connectAudioStream(displayStream);
 
-      if (!hasMicrophoneAudio && !hasDisplayAudio) {
-        throw new Error("No audio source was shared for recording.");
+      if (!hasMicrophoneAudio) {
+        throw new Error("Microphone permission is required to start the consultation.");
+      }
+
+      if (!hasDisplayAudio) {
+        throw new Error("Google Meet tab or window audio must be shared before the consultation can start.");
       }
 
       if (!MediaRecorder.isTypeSupported("audio/webm;codecs=opus") && !MediaRecorder.isTypeSupported("audio/webm")) {
@@ -404,10 +399,6 @@ export default function FacultyDashboard() {
       displayStream?.getTracks().forEach((track) => {
         track.onended = stopRecorderIfActive;
       });
-
-      if (!hasDisplayAudio) {
-        alert("Meeting audio can only be recorded if you choose the Google Meet tab or window and enable audio sharing. This session will record the microphone only.");
-      }
     } catch (err) {
       recordingContextRef.current = null;
       cleanupRecordingResources();
@@ -415,7 +406,7 @@ export default function FacultyDashboard() {
       const message = err instanceof Error
         ? err.message
         : "Could not start audio recording.";
-      throw new Error(`${message} Please ensure you have granted microphone permission and, if needed, shared the Google Meet tab/window audio.`);
+      throw new Error(`${message} Microphone permission and Google Meet/tab audio sharing are required before the consultation can begin.`);
     }
   };
 
