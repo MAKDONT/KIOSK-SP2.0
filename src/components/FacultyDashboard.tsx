@@ -45,6 +45,20 @@ const readJsonResponse = async (response: Response, fallbackMessage: string) => 
   return payload as Record<string, unknown>;
 };
 
+const getConsultationTimeLabel = (consultation: Consultation) => {
+  const scheduledSlot = consultation.time_period?.trim();
+  if (scheduledSlot) {
+    return scheduledSlot;
+  }
+
+  const createdAt = new Date(consultation.created_at);
+  if (Number.isNaN(createdAt.getTime())) {
+    return "Walk-in queue";
+  }
+
+  return `Queued ${createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+};
+
 export default function FacultyDashboard() {
   const { id: selectedFaculty } = useParams();
   const navigate = useNavigate();
@@ -894,7 +908,7 @@ export default function FacultyDashboard() {
                       <div className="flex flex-wrap items-center gap-2 mt-2 text-xs sm:text-sm text-neutral-400">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                          {new Date(student.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          {getConsultationTimeLabel(student)}
                         </span>
                         <span className="px-2 py-0.5 bg-neutral-100 rounded text-[10px] sm:text-xs uppercase tracking-wider">
                           {student.source}
