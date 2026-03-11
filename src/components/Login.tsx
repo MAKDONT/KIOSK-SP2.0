@@ -118,7 +118,7 @@ export default function Login() {
   const fetchLiveQueue = async (retries = 2, silent = false) => {
     if (!silent) setLiveQueueLoading(true);
     try {
-      const res = await fetch("/api/admin/queue-monitor");
+      const res = await fetch("/api/queue/monitor");
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const contentType = res.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {

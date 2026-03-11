@@ -108,6 +108,7 @@ const SUPABASE_RECORDINGS_RETENTION_HOURS =
   Number.isFinite(parsedRecordingRetentionHours) && parsedRecordingRetentionHours > 0
     ? parsedRecordingRetentionHours
     : 48;
+const APP_TIMEZONE = unwrapEnvValue(process.env.APP_TIMEZONE) || "Asia/Manila";
 
 const normalizeEmail = (value: unknown) => (
   typeof value === "string" ? value.trim().toLowerCase() : ""
@@ -618,6 +619,82 @@ async function startServer() {
   const getBodyString = (value: unknown): string => {
     const stringValue = getQueryString(value);
     return stringValue ? stringValue.trim() : "";
+  };
+  const getCurrentAppDate = () => {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+
+    return formatter.format(new Date());
+  };
+  const getCurrentAppWeekday = () => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: APP_TIMEZONE,
+      weekday: "long",
+    });
+
+    return formatter.format(new Date());
+  };
+  const fetchLiveQueueSnapshot = async () => {
+    const { data, error } = await getSupabase()
+      .from("queue")
+      .select(`
+        id, status, created_at, faculty_id, meet_link,
+        students (full_name, student_number),
+        faculty (name)
+      `)
+      .in("status", ["waiting", "next", "serving", "ongoing"])
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    const formatted = (data || []).map((row: any) => {
+      const parts = row.meet_link ? row.meet_link.split("|") : [];
+      const time_period =
+        parts.length > 1
+          ? parts[0]
+          : parts.length === 1 && !parts[0].startsWith("http")
+            ? parts[0]
+            : null;
+      const actual_link =
+        parts.length > 1
+          ? parts[1]
+          : parts.length === 1 && parts[0].startsWith("http")
+            ? parts[0]
+            : null;
+
+      let mappedStatus = row.status;
+      if (row.status === "ongoing") mappedStatus = "serving";
+
+      return {
+        id: row.id,
+        status: mappedStatus,
+        created_at: row.created_at,
+        faculty_id: row.faculty_id,
+        faculty_name: row.faculty?.name || "Unknown Faculty",
+        student_name: row.students?.full_name || "Unknown Student",
+        student_number: row.students?.student_number || "",
+        time_period,
+        meet_link: actual_link,
+      };
+    });
+
+    const rank = (status: string) => {
+      if (status === "serving") return 0;
+      if (status === "next") return 1;
+      return 2;
+    };
+
+    formatted.sort((a: any, b: any) => {
+      const rankDiff = rank(a.status) - rank(b.status);
+      if (rankDiff !== 0) return rankDiff;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+    return formatted;
   };
   const sanitizeDriveFileNamePart = (value: string, fallback: string) => {
     const normalized = value
@@ -1701,7 +1778,7 @@ async function startServer() {
       }
 
       if (!student) {
-        return res.status(404).json({ error: "Student not found" });
+        return res.json({ id: null, active: false });
       }
 
       // Now query the queue using the actual student UUID
@@ -1720,10 +1797,10 @@ async function startServer() {
       }
 
       if (!data) {
-        return res.status(404).json({ error: "No active queue found" });
+        return res.json({ id: null, active: false });
       }
       
-      res.json(data);
+      res.json({ ...data, active: true });
     } catch (err: any) {
       console.error("Active queue fetch error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -1959,8 +2036,7 @@ async function startServer() {
       // Check if any faculty has today's availability slots configured
       // Faculty with availability slots are shown on kiosk regardless of their current status
       // This allows students to see and queue for faculty even during consultations
-      const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      const todayDay = daysOfWeek[new Date().getDay()];
+      const todayDay = getCurrentAppWeekday();
       
       let hasFacultyWithAvailabilitySlots = false;
       
@@ -2126,7 +2202,7 @@ async function startServer() {
   // Get Booked Slots for Today
   app.get("/api/queue/booked-slots", async (req, res) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getCurrentAppDate();
       const { data, error } = await getSupabase()
         .from("queue")
         .select("faculty_id, meet_link")
@@ -2206,65 +2282,20 @@ async function startServer() {
     }
   });
 
+  app.get("/api/queue/monitor", async (_req, res) => {
+    try {
+      const formatted = await fetchLiveQueueSnapshot();
+      res.json(formatted);
+    } catch (err: any) {
+      console.error("Public queue monitor error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Admin: Live queue monitoring (waiting, next, ongoing) - REQUIRES AUTHENTICATION
   app.get("/api/admin/queue-monitor", requireAdminAuth, async (req, res) => {
     try {
-      const { data, error } = await getSupabase()
-        .from("queue")
-        .select(`
-          id, status, created_at, faculty_id, meet_link,
-          students (full_name, student_number),
-          faculty (name)
-        `)
-        .in("status", ["waiting", "next", "serving", "ongoing"])
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      const formatted = (data || []).map((row: any) => {
-        const parts = row.meet_link ? row.meet_link.split("|") : [];
-        const time_period =
-          parts.length > 1
-            ? parts[0]
-            : parts.length === 1 && !parts[0].startsWith("http")
-              ? parts[0]
-              : null;
-        const actual_link =
-          parts.length > 1
-            ? parts[1]
-            : parts.length === 1 && parts[0].startsWith("http")
-              ? parts[0]
-              : null;
-
-        let mappedStatus = row.status;
-        if (row.status === "ongoing") mappedStatus = "serving";
-
-        return {
-          id: row.id,
-          status: mappedStatus,
-          created_at: row.created_at,
-          faculty_id: row.faculty_id,
-          faculty_name: row.faculty?.name || "Unknown Faculty",
-          student_name: row.students?.full_name || "Unknown Student",
-          student_number: row.students?.student_number || "",
-          time_period,
-          meet_link: actual_link,
-        };
-      });
-
-      // Prioritize current activity first: serving -> next -> waiting
-      const rank = (status: string) => {
-        if (status === "serving") return 0;
-        if (status === "next") return 1;
-        return 2;
-      };
-
-      formatted.sort((a: any, b: any) => {
-        const rankDiff = rank(a.status) - rank(b.status);
-        if (rankDiff !== 0) return rankDiff;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
-
+      const formatted = await fetchLiveQueueSnapshot();
       res.json(formatted);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
