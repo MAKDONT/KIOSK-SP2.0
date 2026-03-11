@@ -223,6 +223,7 @@ export default function FacultyDashboard() {
   const [googleMeetLoading, setGoogleMeetLoading] = useState(false);
   const [showAudioPermissionModal, setShowAudioPermissionModal] = useState(false);
   const [audioPermissionCallback, setAudioPermissionCallback] = useState<((granted: boolean) => void) | null>(null);
+  const [audioPermissionError, setAudioPermissionError] = useState("");
 
   const fetchGoogleMeetStatus = async () => {
     if (!selectedFaculty) return;
@@ -661,13 +662,38 @@ export default function FacultyDashboard() {
 
   const requestAudioPermission = (): Promise<boolean> => {
     return new Promise((resolve) => {
+      setAudioPermissionError("");
       setAudioPermissionCallback(() => resolve);
       setShowAudioPermissionModal(true);
     });
   };
 
+  const createMeetLink = async (consultationId: number) => {
+    const res = await fetch(`/api/queue/${consultationId}/meet-link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const payload = await readJsonResponse(res, "Failed to prepare Google Meet link.");
+    if (!res.ok) {
+      const error = new Error(
+        typeof payload.error === "string" ? payload.error : "Failed to prepare Google Meet link."
+      ) as Error & { meetRequired?: boolean };
+      error.meetRequired = payload.meet_required === true;
+      throw error;
+    }
+
+    const meetLink = typeof payload.meet_link === "string" ? normalizeMeetLink(payload.meet_link) : "";
+    if (!meetLink) {
+      throw new Error("Google Meet link was not generated. Add a manual Google Meet link and try again.");
+    }
+
+    return meetLink;
+  };
+
   const handleAudioPermissionAllow = async () => {
     try {
+      setAudioPermissionError("");
       const microphoneStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: false
@@ -679,14 +705,12 @@ export default function FacultyDashboard() {
       audioPermissionCallback?.(true);
     } catch (err) {
       console.error("Microphone permission denied:", err);
-      setShowAudioPermissionModal(false);
-      audioPermissionCallback?.(false);
+      setAudioPermissionError("Audio recording is mandatory. Please allow microphone access to continue.");
     }
   };
 
   const handleAudioPermissionDeny = () => {
-    setShowAudioPermissionModal(false);
-    audioPermissionCallback?.(false);
+    setAudioPermissionError("Audio recording is mandatory. Please allow microphone access to continue.");
   };
 
   const handleStartSession = async (id: number, existingLink?: string) => {
@@ -728,13 +752,22 @@ export default function FacultyDashboard() {
 
     try {
       // Step 0: Request audio recording permission before starting consultation
-      const audioPermissionGranted = await requestAudioPermission();
-      if (!audioPermissionGranted) {
-        setStartingSessionId(null);
-        return;
+      await requestAudioPermission();
+
+      if (!finalLink) {
+        finalLink = await createMeetLink(id);
       }
 
-      // Step 1: Update status and get the meet link from the server FIRST
+      const sessionWindow = window.open(finalLink, "_blank");
+      if (!sessionWindow) {
+        throw new Error("Popup was blocked. Allow popups so Google Meet can open before recording starts.");
+      }
+      sessionWindowRef.current = sessionWindow;
+
+      // Step 1: Start audio recording first so cancelling share does not create a serving session.
+      await startAudioRecording(recordingContext);
+
+      // Step 2: Mark the consultation as started only after audio capture succeeds.
       const data = await updateStatus(id, "serving", finalLink || undefined, false, true);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
@@ -746,19 +779,6 @@ export default function FacultyDashboard() {
         ...current,
         [id]: resolvedLink,
       }));
-
-      // Step 2: Open the Google Meet tab so it's available for audio capture
-      sessionWindowRef.current = window.open(resolvedLink, "_blank");
-
-      // Step 3: Now start audio recording — the user can pick the Google Meet tab
-      // from the sharing dialog since it's already open
-      try {
-        await startAudioRecording(recordingContext);
-      } catch (recordingErr) {
-        // Recording failed but the consultation is already started with a valid
-        // Meet link. Continue without recording instead of rolling back the session.
-        console.warn("Audio recording could not be started:", recordingErr);
-      }
 
       fetchQueue();
     } catch (err) {
@@ -1018,7 +1038,7 @@ export default function FacultyDashboard() {
                           }`}>
                             {googleMeetMode === "none"
                               ? "Paste a manual Google Meet link before starting, or configure automatic Meet link generation in Integrations."
-                              : "Google Meet link will be generated automatically when you start the consultation."}
+                              : "Google Meet will be prepared after you grant recording permissions, then the consultation will start once Meet audio sharing succeeds."}
                           </div>
                         )}
                         <div className="w-full sm:w-72 space-y-2">
@@ -1293,12 +1313,18 @@ export default function FacultyDashboard() {
               </p>
             </div>
 
+            {audioPermissionError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <p className="text-sm text-red-700 font-medium">{audioPermissionError}</p>
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={handleAudioPermissionDeny}
                 className="px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors order-2 sm:order-1"
               >
-                Cancel
+                Ask Again
               </button>
               <button
                 onClick={handleAudioPermissionAllow}

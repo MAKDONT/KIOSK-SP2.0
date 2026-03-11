@@ -2389,6 +2389,43 @@ async function startServer() {
   });
 
   // Faculty Action: Update Consultation Status
+  app.post("/api/queue/:id/meet-link", async (req, res) => {
+    try {
+      const consultationId = req.params.id;
+
+      const { data: consultation, error: fetchError } = await getSupabase()
+        .from("queue")
+        .select("id, faculty_id, meet_link")
+        .eq("id", consultationId)
+        .single();
+
+      if (fetchError || !consultation) {
+        return res.status(404).json({ error: "Consultation not found" });
+      }
+
+      const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
+      const existingLink =
+        parts.length > 1
+          ? parts[1]
+          : parts.length === 1 && parts[0].startsWith('http')
+            ? parts[0]
+            : "";
+
+      if (existingLink) {
+        return res.json({ meet_link: existingLink });
+      }
+
+      const meetLink = await createGoogleMeetLink(consultation.faculty_id, req);
+      res.json({ meet_link: meetLink });
+    } catch (err: any) {
+      console.error("Meet link preflight error:", err);
+      res.status(400).json({
+        error: err?.message || "Failed to generate Google Meet link.",
+        meet_required: true,
+      });
+    }
+  });
+
   app.post("/api/queue/:id/status", async (req, res) => {
     try {
       // Input validation
@@ -2436,14 +2473,10 @@ async function startServer() {
         const time_period = parts.length > 1 ? parts[0] : (parts.length === 1 && !parts[0].startsWith('http') ? parts[0] : null);
 
         if (!finalMeetLink) {
-          try {
-            finalMeetLink = await createGoogleMeetLink(consultation.faculty_id, req);
-          } catch (meetErr: any) {
-            return res.status(400).json({
-              error: meetErr.message || "Failed to generate Google Meet link.",
-              meet_required: true,
-            });
-          }
+          return res.status(400).json({
+            error: "A Google Meet link is required before starting the consultation.",
+            meet_required: true,
+          });
         }
 
         updates.meet_link = time_period ? `${time_period}|${finalMeetLink}` : finalMeetLink;
