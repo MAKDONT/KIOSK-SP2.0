@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download } from "lucide-react";
+import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download, Mail } from "lucide-react";
 
 interface LiveQueueItem {
   id: number;
@@ -87,6 +87,11 @@ export default function AdminDashboard() {
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
   const [adminPasswordSaving, setAdminPasswordSaving] = useState(false);
   const [adminPasswordError, setAdminPasswordError] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminEmailInput, setAdminEmailInput] = useState("");
+  const [adminEmailSaving, setAdminEmailSaving] = useState(false);
+  const [adminEmailError, setAdminEmailError] = useState("");
+  const [adminEmailSuccess, setAdminEmailSuccess] = useState(false);
 
   const [driveConnected, setDriveConnected] = useState(false);
   const [driveMode, setDriveMode] = useState<"service_account" | "oauth" | "none">("none");
@@ -105,6 +110,7 @@ export default function AdminDashboard() {
   const [driveRecordingsSearch, setDriveRecordingsSearch] = useState("");
   const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
   const [recordingStorageReady, setRecordingStorageReady] = useState(false);
+  const [facultySearch, setFacultySearch] = useState("");
 
   useEffect(() => {
     if (localStorage.getItem("user_role") !== "admin") {
@@ -117,6 +123,7 @@ export default function AdminDashboard() {
     checkDriveStatus();
     void checkRecordingStorageStatus();
     fetchLiveQueue();
+    fetchAdminEmail();
   }, [navigate]);
 
   useEffect(() => {
@@ -815,6 +822,9 @@ export default function AdminDashboard() {
     setAdminPasswordInput("");
     setAdminPasswordConfirm("");
     setAdminPasswordError("");
+    setAdminEmailInput(adminEmail);
+    setAdminEmailError("");
+    setAdminEmailSuccess(false);
     setAdminPasswordModalOpen(true);
   };
 
@@ -855,6 +865,47 @@ export default function AdminDashboard() {
       setAdminPasswordError(err.message || "Failed to update admin password");
     } finally {
       setAdminPasswordSaving(false);
+    }
+  };
+
+  const fetchAdminEmail = async () => {
+    try {
+      const res = await fetch("/api/admin/email");
+      const data = await res.json();
+      setAdminEmail(data.email || "");
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSaveAdminEmail = async () => {
+    const email = adminEmailInput.trim().toLowerCase();
+    if (!email) {
+      setAdminEmailError("Email is required.");
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setAdminEmailError("Invalid email format.");
+      return;
+    }
+    setAdminEmailSaving(true);
+    setAdminEmailError("");
+    setAdminEmailSuccess(false);
+    try {
+      const res = await fetch("/api/admin/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save admin email");
+      setAdminEmail(email);
+      setAdminEmailSuccess(true);
+    } catch (err: any) {
+      setAdminEmailError(err.message || "Failed to save admin email");
+    } finally {
+      setAdminEmailSaving(false);
     }
   };
 
@@ -934,12 +985,35 @@ export default function AdminDashboard() {
   const departmentById = new Map<string, any>((departments || []).map((d: any) => [String(d.id), d]));
   const collegeById = new Map<string, any>((colleges || []).map((c: any) => [String(c.id), c]));
   const facultiesByCollege = (colleges || []).map((college: any) => {
-    const items = (faculties || []).filter((fac: any) => {
-      const dept = departmentById.get(String(fac.department_id));
-      return dept && String(dept.college_id) === String(college.id);
+    const collegeDepts = (departments || []).filter((d: any) => String(d.college_id) === String(college.id));
+    const deptGroups = collegeDepts.map((dept: any) => {
+      const deptFaculties = (faculties || []).filter((fac: any) => String(fac.department_id) === String(dept.id));
+      return { id: String(dept.id), name: dept.name, items: deptFaculties };
     });
-    return { id: String(college.id), name: college.name, items };
+    const totalFaculty = deptGroups.reduce((sum: number, g: any) => sum + g.items.length, 0);
+    return { id: String(college.id), name: college.name, departments: deptGroups, totalFaculty };
   });
+  
+  // Filter faculties by college based on search query
+  const filteredFacultiesByCollege = facultySearch.trim() === "" 
+    ? facultiesByCollege 
+    : facultiesByCollege
+        .map((college: any) => ({
+          ...college,
+          departments: college.departments
+            .map((dept: any) => ({
+              ...dept,
+              items: dept.items.filter((fac: any) =>
+                fac.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
+                fac.email.toLowerCase().includes(facultySearch.toLowerCase()) ||
+                dept.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
+                college.name.toLowerCase().includes(facultySearch.toLowerCase())
+              )
+            }))
+            .filter((dept: any) => dept.items.length > 0)
+        }))
+        .filter((college: any) => college.departments.length > 0);
+  
   const unassignedCollegeFaculties = (faculties || []).filter((fac: any) => {
     const dept = departmentById.get(String(fac.department_id));
     if (!dept) return true;
@@ -960,18 +1034,29 @@ export default function AdminDashboard() {
         </div>
         <div className="flex items-center gap-4">
           <div className="hidden xl:flex items-center gap-2 mr-4 border-r border-neutral-200 pr-4">
-            <span className="px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-medium rounded-lg border border-blue-100">
-              Meet Links: Faculty Google Accounts
-            </span>
-            <span className="px-3 py-1.5 bg-neutral-50 text-neutral-600 text-sm font-medium rounded-lg border border-neutral-200">
-              Faculty connect Google from their own dashboard
-            </span>
+            {oauthConnected && !oauthExpired ? (
+              <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-sm font-medium rounded-lg border border-emerald-100">
+                Google Connected
+              </span>
+            ) : oauthExpired ? (
+              <span className="px-3 py-1.5 bg-amber-50 text-amber-700 text-sm font-medium rounded-lg border border-amber-100">
+                Google Expired — Reconnect
+              </span>
+            ) : driveMode === "service_account" ? (
+              <span className="px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-medium rounded-lg border border-blue-100">
+                Google: Service Account
+              </span>
+            ) : (
+              <span className="px-3 py-1.5 bg-red-50 text-red-700 text-sm font-medium rounded-lg border border-red-100">
+                Google Not Connected
+              </span>
+            )}
           </div>
           <button
             onClick={openAdminPasswordModal}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors"
           >
-            <KeyRound className="w-4 h-4" /> Edit Admin Password
+            <KeyRound className="w-4 h-4" /> Admin Settings
           </button>
           <button
             onClick={handleLogout}
@@ -981,6 +1066,40 @@ export default function AdminDashboard() {
           </button>
         </div>
       </header>
+
+      {/* Admin Google Email Banner */}
+      {!adminEmail && (
+        <section className="px-8 pt-6 max-w-7xl mx-auto w-full">
+          <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="p-2 bg-amber-100 rounded-xl">
+                <Mail className="w-5 h-5 text-amber-700" />
+              </div>
+              <div>
+                <h3 className="font-bold text-amber-900 text-sm">Set Up Admin Google Account</h3>
+                <p className="text-xs text-amber-700">Required for Google Sign-In and password recovery on the admin login page.</p>
+              </div>
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto sm:ml-auto">
+              <input
+                type="email"
+                value={adminEmailInput}
+                onChange={(e) => { setAdminEmailInput(e.target.value); setAdminEmailSuccess(false); }}
+                placeholder="your-email@gmail.com"
+                className="flex-1 sm:w-64 p-2.5 border-2 border-amber-300 rounded-xl bg-white focus:border-amber-500 focus:ring-0 outline-none transition-colors text-sm"
+              />
+              <button
+                onClick={handleSaveAdminEmail}
+                disabled={adminEmailSaving}
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-bold rounded-xl transition-colors text-sm whitespace-nowrap"
+              >
+                {adminEmailSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+            {adminEmailError && <p className="text-xs text-red-600 w-full">{adminEmailError}</p>}
+          </div>
+        </section>
+      )}
 
       {/* Live Queue Monitoring */}
       <section className="px-8 pt-8 max-w-7xl mx-auto w-full">
@@ -1601,84 +1720,122 @@ export default function AdminDashboard() {
           <p className="text-sm text-neutral-500 mt-1">Faculty records are grouped per college for easier monitoring.</p>
         </div>
 
+        {/* Search Input */}
+        <div className="flex items-center gap-2 bg-white rounded-2xl shadow-md p-4 border border-neutral-200">
+          <Search className="w-5 h-5 text-neutral-400" />
+          <input
+            type="text"
+            value={facultySearch}
+            onChange={(e) => setFacultySearch(e.target.value)}
+            placeholder="Search by faculty name, email, college, or department..."
+            className="flex-1 p-2 bg-transparent outline-none text-neutral-900 placeholder-neutral-400"
+          />
+          {facultySearch && (
+            <button
+              onClick={() => setFacultySearch("")}
+              className="px-3 py-1 text-sm bg-neutral-100 hover:bg-neutral-200 text-neutral-600 rounded-lg transition-colors"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
         {faculties.length === 0 ? (
           <div className="bg-white rounded-3xl shadow-lg p-8 text-center text-neutral-500">
             No faculties registered yet.
           </div>
+        ) : filteredFacultiesByCollege.length === 0 ? (
+          <div className="bg-white rounded-3xl shadow-lg p-8 text-center text-neutral-500">
+            No faculties found matching "{facultySearch}".
+          </div>
         ) : (
           <>
-            {facultiesByCollege.map((group) => (
+            {filteredFacultiesByCollege.map((group) => (
               <div key={group.id} className="bg-white rounded-3xl shadow-lg p-8">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-xl font-bold text-neutral-900">{group.name}</h3>
                   <span className="px-3 py-1 rounded-lg bg-neutral-100 text-neutral-600 text-sm font-medium">
-                    {group.items.length} faculty
+                    {group.totalFaculty} faculty
                   </span>
                 </div>
-                {group.items.length === 0 ? (
+                {group.departments.length === 0 ? (
                   <div className="p-4 rounded-2xl bg-neutral-50 text-neutral-500 text-sm border border-neutral-200">
-                    No faculty registered for this college.
+                    No departments in this college.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b-2 border-neutral-100">
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Name</th>
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Email</th>
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Faculty Code</th>
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Department</th>
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Status</th>
-                          <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-neutral-100">
-                        {group.items.map((fac: any) => (
-                          <tr key={fac.id} className="hover:bg-neutral-50 transition-colors group">
-                            <td className="py-4 px-4 font-medium text-neutral-900">{fac.name}</td>
-                            <td className="py-4 px-4 text-neutral-600">{fac.email}</td>
-                            <td className="py-4 px-4 font-mono text-sm text-neutral-500">{fac.faculty_code}</td>
-                            <td className="py-4 px-4 text-neutral-600">
-                              {departmentById.get(String(fac.department_id))?.name || fac.department || "Unknown Department"}
-                            </td>
-                            <td className="py-4 px-4">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                fac.status === 'available' ? 'bg-green-100 text-green-800' :
-                                fac.status === 'busy' ? 'bg-red-100 text-red-800' :
-                                'bg-gray-100 text-gray-800'
-                              }`}>
-                                {fac.status}
-                              </span>
-                            </td>
-                            <td className="py-4 px-4 text-right">
-                              <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button
-                                  onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email)}
-                                  className="px-2 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
-                                  title="Edit Faculty Profile"
-                                >
-                                  Edit Info
-                                </button>
-                                <button
-                                  onClick={() => openEditFacultyPasswordModal(fac.id, fac.name)}
-                                  className="p-2 text-neutral-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                                  title="Edit Password"
-                                >
-                                  <KeyRound className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => setDeleteFacultyModal({ isOpen: true, id: fac.id, name: fac.name })}
-                                  className="p-2 text-neutral-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Delete Faculty"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="space-y-6">
+                    {group.departments.map((dept: any) => (
+                      <div key={dept.id} className="border border-neutral-200 rounded-2xl overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-3 bg-neutral-50 border-b border-neutral-200">
+                          <h4 className="text-base font-semibold text-neutral-700">{dept.name}</h4>
+                          <span className="px-2.5 py-0.5 rounded-lg bg-white text-neutral-500 text-xs font-medium border border-neutral-200">
+                            {dept.items.length} faculty
+                          </span>
+                        </div>
+                        {dept.items.length === 0 ? (
+                          <div className="p-4 text-neutral-400 text-sm">
+                            No faculty registered in this department.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="border-b border-neutral-100">
+                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Name</th>
+                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Email</th>
+                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Faculty Code</th>
+                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Status</th>
+                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs text-right">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-neutral-100">
+                                {dept.items.map((fac: any) => (
+                                  <tr key={fac.id} className="hover:bg-neutral-50 transition-colors group">
+                                    <td className="py-4 px-4 font-medium text-neutral-900">{fac.name}</td>
+                                    <td className="py-4 px-4 text-neutral-600">{fac.email}</td>
+                                    <td className="py-4 px-4 font-mono text-sm text-neutral-500">{fac.faculty_code}</td>
+                                    <td className="py-4 px-4">
+                                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                        fac.status === 'available' ? 'bg-green-100 text-green-800' :
+                                        fac.status === 'busy' ? 'bg-red-100 text-red-800' :
+                                        'bg-gray-100 text-gray-800'
+                                      }`}>
+                                        {fac.status}
+                                      </span>
+                                    </td>
+                                    <td className="py-4 px-4 text-right">
+                                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                          onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email)}
+                                          className="px-2 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                                          title="Edit Faculty Profile"
+                                        >
+                                          Edit Info
+                                        </button>
+                                        <button
+                                          onClick={() => openEditFacultyPasswordModal(fac.id, fac.name)}
+                                          className="p-2 text-neutral-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                          title="Edit Password"
+                                        >
+                                          <KeyRound className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                          onClick={() => setDeleteFacultyModal({ isOpen: true, id: fac.id, name: fac.name })}
+                                          className="p-2 text-neutral-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                          title="Delete Faculty"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1705,7 +1862,11 @@ export default function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-100">
-                      {unassignedCollegeFaculties.map((fac: any) => (
+                      {unassignedCollegeFaculties.filter((fac: any) => {
+                        if (!facultySearch) return true;
+                        return fac.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
+                               fac.email.toLowerCase().includes(facultySearch.toLowerCase());
+                      }).map((fac: any) => (
                         <tr key={fac.id} className="hover:bg-neutral-50 transition-colors group">
                           <td className="py-4 px-4 font-medium text-neutral-900">{fac.name}</td>
                           <td className="py-4 px-4 text-neutral-600">{fac.email}</td>
@@ -2061,14 +2222,100 @@ export default function AdminDashboard() {
 
       {adminPasswordModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center gap-4 text-indigo-600 mb-6">
               <div className="p-3 bg-indigo-100 rounded-full">
                 <KeyRound className="w-8 h-8" />
               </div>
-              <h2 className="text-2xl font-bold text-neutral-900">Edit Admin Password</h2>
+              <h2 className="text-2xl font-bold text-neutral-900">Admin Settings</h2>
             </div>
-            <p className="text-neutral-600 mb-6">
+
+            {/* Admin Email for Google OAuth */}
+            <div className="mb-8 p-4 bg-neutral-50 rounded-2xl border border-neutral-200">
+              <h3 className="text-sm font-bold text-neutral-700 uppercase tracking-wider mb-3">Admin Google Email</h3>
+              <p className="text-xs text-neutral-500 mb-3">
+                Set the Google email used for Google Sign-In and password recovery on the admin login page.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={adminEmailInput}
+                  onChange={(e) => { setAdminEmailInput(e.target.value); setAdminEmailSuccess(false); }}
+                  placeholder="admin@gmail.com"
+                  className="flex-1 p-3 border-2 border-neutral-200 rounded-xl bg-white focus:border-indigo-500 focus:ring-0 outline-none transition-colors text-sm"
+                />
+                <button
+                  onClick={handleSaveAdminEmail}
+                  disabled={adminEmailSaving}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl transition-colors text-sm whitespace-nowrap"
+                >
+                  {adminEmailSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
+              {adminEmailError && <p className="text-xs text-red-600 mt-2">{adminEmailError}</p>}
+              {adminEmailSuccess && <p className="text-xs text-emerald-600 mt-2">Admin email saved successfully.</p>}
+            </div>
+
+            {/* Google Account Connection */}
+            <div className="mb-8 p-4 bg-neutral-50 rounded-2xl border border-neutral-200">
+              <h3 className="text-sm font-bold text-neutral-700 uppercase tracking-wider mb-3">Google Account Connection</h3>
+              <p className="text-xs text-neutral-500 mb-3">
+                Connect Google to enable auto-generated Meet links and Drive recording uploads.
+              </p>
+              {oauthConnected && !oauthExpired ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span className="text-sm font-medium text-emerald-700">Google Connected</span>
+                    {googleExpiryLabel && (
+                      <span className="text-xs text-neutral-400 ml-auto">Expires {googleExpiryLabel}</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleConnectDrive}
+                      className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-colors text-sm"
+                    >
+                      Reconnect
+                    </button>
+                    <button
+                      onClick={handleDisconnectDrive}
+                      className="flex-1 px-4 py-2 bg-neutral-200 hover:bg-neutral-300 text-neutral-700 font-bold rounded-xl transition-colors text-sm"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+              ) : oauthExpired ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+                    <span className="text-sm font-medium text-amber-700">Session Expired</span>
+                  </div>
+                  <button
+                    onClick={handleConnectDrive}
+                    className="w-full px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-colors text-sm"
+                  >
+                    Reconnect Google
+                  </button>
+                </div>
+              ) : driveMode === "service_account" ? (
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
+                  <span className="text-sm font-medium text-blue-700">Connected via Service Account</span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnectDrive}
+                  className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-colors text-sm"
+                >
+                  Connect Google Account
+                </button>
+              )}
+            </div>
+
+            {/* Admin Password */}
+            <p className="text-neutral-600 mb-4">
               Enter a new password for the admin account.
             </p>
             <div className="space-y-4 mb-6">

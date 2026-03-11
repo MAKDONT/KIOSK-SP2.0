@@ -431,14 +431,24 @@ export default function KioskView() {
               <label className="block text-base sm:text-lg font-semibold text-neutral-800 mb-2">
                 Consultation Concern <span className="text-red-500">*</span>
               </label>
-              <textarea
+              <select
                 value={consultationConcern}
                 onChange={(e) => setConsultationConcern(e.target.value)}
-                placeholder="Briefly describe why you need this consultation..."
-                rows={4}
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-white focus:border-indigo-500 focus:ring-0 outline-none transition-colors resize-none text-base"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-white focus:border-indigo-500 focus:ring-0 outline-none transition-colors text-base appearance-none"
                 required
-              />
+              >
+                <option value="">Select your concern...</option>
+                <option value="Academic Advising">Academic Advising</option>
+                <option value="Grade Consultation">Grade Consultation</option>
+                <option value="Thesis / Capstone Advising">Thesis / Capstone Advising</option>
+                <option value="Course Enrollment / Schedule">Course Enrollment / Schedule</option>
+                <option value="Internship / OJT Concern">Internship / OJT Concern</option>
+                <option value="Project Guidance">Project Guidance</option>
+                <option value="Attendance / Absence Concern">Attendance / Absence Concern</option>
+                <option value="Personal / Counseling">Personal / Counseling</option>
+                <option value="Scholarship / Financial Aid">Scholarship / Financial Aid</option>
+                <option value="Other">Other</option>
+              </select>
             </div>
             <button
               onClick={handleJoinQueue}

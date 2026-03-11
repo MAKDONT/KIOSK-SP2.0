@@ -333,6 +333,18 @@ export default function FacultyDashboard() {
     };
   }, []);
 
+  // Warn user before accidental page reload while recording is active
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [mediaRecorder]);
+
   useEffect(() => {
     return () => {
       if (sessionWindowRef.current && !sessionWindowRef.current.closed) {
@@ -550,7 +562,10 @@ export default function FacultyDashboard() {
         track.onended = stopRecorderIfActive;
       });
 
-      displayStream?.getTracks().forEach((track) => {
+      // Only listen on audio tracks — video tracks from getDisplayMedia can end when
+      // the faculty tab goes to background (user switches to Google Meet tab) and
+      // should NOT stop the audio recording.
+      displayStream?.getAudioTracks().forEach((track) => {
         track.onended = stopRecorderIfActive;
       });
     } catch (err) {
@@ -672,16 +687,13 @@ export default function FacultyDashboard() {
     }
 
     setStartingSessionId(id);
-    prepareSessionWindow();
 
     try {
-      await startAudioRecording(recordingContext);
-
+      // Step 1: Update status and get the meet link from the server FIRST
       const data = await updateStatus(id, "serving", draftLink ? finalLink : undefined);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
-        closeSessionWindow();
         throw new Error("Google Meet link was not generated. Add a manual Google Meet link and try again.");
       }
 
@@ -690,7 +702,19 @@ export default function FacultyDashboard() {
         [id]: resolvedLink,
       }));
 
-      openPreparedSessionWindow(resolvedLink);
+      // Step 2: Open the Google Meet tab so it's available for audio capture
+      sessionWindowRef.current = window.open(resolvedLink, "_blank");
+
+      // Step 3: Now start audio recording — the user can pick the Google Meet tab
+      // from the sharing dialog since it's already open
+      try {
+        await startAudioRecording(recordingContext);
+      } catch (recordingErr) {
+        // Recording failed but the consultation is already started with a valid
+        // Meet link. Continue without recording instead of rolling back the session.
+        console.warn("Audio recording could not be started:", recordingErr);
+      }
+
       fetchQueue();
     } catch (err) {
       discardRecordingOnStopRef.current = true;
@@ -1055,9 +1079,7 @@ export default function FacultyDashboard() {
                     <div
                       className={`p-3 rounded-xl border flex items-center gap-3 ${
                         googleMeetConnected
-                          ? googleMeetMode === "oauth"
-                            ? "bg-blue-50 border-blue-100"
-                            : "bg-emerald-50 border-emerald-100"
+                          ? "bg-emerald-50 border-emerald-100"
                           : "bg-neutral-50 border-neutral-200"
                       }`}
                     >
@@ -1071,68 +1093,21 @@ export default function FacultyDashboard() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className={`text-sm font-medium truncate ${
-                          googleMeetConnected
-                            ? googleMeetMode === "oauth"
-                              ? "text-blue-800"
-                              : "text-emerald-800"
-                            : "text-neutral-700"
+                          googleMeetConnected ? "text-emerald-800" : "text-neutral-700"
                         }`}>
-                          {googleMeetMode === "oauth"
-                            ? "Google Meet Auto-Link Ready"
-                            : googleMeetMode === "service_account"
-                              ? "Google Meet Auto-Link Managed by Server"
-                              : "Faculty Google Not Connected"}
+                          {googleMeetConnected
+                            ? "Google Meet Auto-Links Active"
+                            : "Google Meet Not Connected"}
                         </p>
                         <p className={`text-xs truncate ${
-                          googleMeetConnected
-                            ? googleMeetMode === "oauth"
-                              ? "text-blue-600"
-                              : "text-emerald-600"
-                            : "text-neutral-500"
+                          googleMeetConnected ? "text-emerald-600" : "text-neutral-500"
                         }`}>
-                          {googleMeetMode === "oauth"
-                            ? googleMeetEmail
-                              ? `Connected as ${googleMeetEmail}`
-                              : "Meet links will be created from your Google account."
-                            : googleMeetMode === "service_account"
-                              ? googleMeetEmail
-                                ? `Server-managed Meet creation is active via ${googleMeetEmail}.`
-                                : "Server-managed Meet creation is active."
-                              : "Connect your Google account so Meet links are created under your own Google profile."}
+                          {googleMeetConnected
+                            ? "Meet links are auto-generated by the admin Google account."
+                            : "Ask the admin to connect their Google account from the Admin Dashboard."}
                         </p>
                       </div>
                     </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={handleConnectGoogleMeet}
-                        disabled={googleMeetLoading}
-                        className="px-4 py-2 bg-white hover:bg-neutral-50 disabled:bg-neutral-100 disabled:text-neutral-400 text-neutral-700 text-sm font-medium rounded-xl border border-neutral-200 transition-colors"
-                      >
-                        {googleMeetLoading
-                          ? "Opening Google..."
-                          : googleMeetMode === "oauth"
-                            ? "Reconnect Google"
-                            : "Connect Google"}
-                      </button>
-                      {googleMeetMode === "oauth" && (
-                        <button
-                          type="button"
-                          onClick={handleDisconnectGoogleMeet}
-                          disabled={googleMeetLoading}
-                          className="px-4 py-2 bg-red-50 hover:bg-red-100 disabled:bg-red-50/60 disabled:text-red-300 text-red-700 text-sm font-medium rounded-xl border border-red-100 transition-colors"
-                        >
-                          Disconnect
-                        </button>
-                      )}
-                    </div>
-
-                    {googleMeetMode === "oauth" && googleMeetConnectedAt ? (
-                      <p className="text-xs text-neutral-500">
-                        Connected on {new Date(googleMeetConnectedAt).toLocaleString()}
-                      </p>
-                    ) : null}
                   </div>
                   {recordingStorageReady ? (
                     <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center gap-3">

@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
+import crypto from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import sgMail from "@sendgrid/mail";
 import { google } from "googleapis";
@@ -31,7 +32,21 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-const upload = multer({ dest: UPLOADS_DIR });
+const ALLOWED_UPLOAD_MIMETYPES = [
+  "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav",
+  "audio/x-wav", "audio/aac", "video/webm", "application/octet-stream",
+];
+const upload = multer({
+  dest: UPLOADS_DIR,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB max
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_UPLOAD_MIMETYPES.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("File type not allowed."));
+    }
+  },
+});
 
 const TOKEN_PATH = path.join(APP_DATA_DIR, "drive-tokens.json");
 const FACULTY_GOOGLE_TOKENS_PATH = path.join(APP_DATA_DIR, "faculty-google-tokens.json");
@@ -40,6 +55,7 @@ const OAUTH_CALLBACK_PATH = '/api/auth/google/callback';
 const LEGACY_OAUTH_CALLBACK_PATH = '/auth/callback';
 const GOOGLE_DRIVE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive";
 const GOOGLE_MEET_CREATE_SCOPE = "https://www.googleapis.com/auth/meetings.space.created";
+const GOOGLE_USERINFO_EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
 const GOOGLE_OAUTH_SCOPES = [GOOGLE_DRIVE_UPLOAD_SCOPE, GOOGLE_MEET_CREATE_SCOPE];
 
 type AdminDriveAuthData = {
@@ -95,6 +111,63 @@ const SUPABASE_RECORDINGS_RETENTION_HOURS =
 const normalizeEmail = (value: unknown) => (
   typeof value === "string" ? value.trim().toLowerCase() : ""
 );
+
+// --- Password Hashing Utilities ---
+const SCRYPT_KEYLEN = 64;
+const SCRYPT_COST = 16384;
+const SCRYPT_BLOCK_SIZE = 8;
+const SCRYPT_PARALLELIZATION = 1;
+const HASH_PREFIX = "$scrypt$";
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELIZATION,
+  });
+  return `${HASH_PREFIX}${salt}$${derived.toString("hex")}`;
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  if (stored.startsWith(HASH_PREFIX)) {
+    const parts = stored.slice(HASH_PREFIX.length).split("$");
+    if (parts.length !== 2) return false;
+    const [salt, hash] = parts;
+    const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+      N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELIZATION,
+    });
+    return crypto.timingSafeEqual(Buffer.from(hash, "hex"), derived);
+  }
+  // Legacy plaintext comparison (will be migrated on next login)
+  return password === stored;
+}
+
+function isPasswordHashed(stored: string): boolean {
+  return stored.startsWith(HASH_PREFIX);
+}
+
+// --- Rate Limiting ---
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX_ATTEMPTS = 10;
+
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now > entry.resetAt) {
+    loginAttempts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  entry.count++;
+  return entry.count > RATE_LIMIT_MAX_ATTEMPTS;
+}
+
+// Clean up stale rate limit entries every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of loginAttempts) {
+    if (now > entry.resetAt) loginAttempts.delete(key);
+  }
+}, 30 * 60 * 1000);
 
 function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
   const credentialsFilePath = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_FILE);
@@ -318,8 +391,23 @@ async function startServer() {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
 
-  app.use(express.json());
-  app.set("trust proxy", true);
+  app.use(express.json({ limit: "1mb" }));
+  app.set("trust proxy", 1);
+
+  // --- Security Headers ---
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss: ws: https:; frame-src https://meet.google.com; font-src 'self' data:;"
+    );
+    res.removeHeader("X-Powered-By");
+    next();
+  });
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, uptime: Math.floor(process.uptime()) });
@@ -551,7 +639,7 @@ async function startServer() {
 
   type OAuthState = {
     redirectUri?: string;
-    role?: "admin" | "faculty";
+    role?: "admin" | "faculty" | "admin_login" | "admin_reset";
     facultyId?: string;
   };
   type OAuthAuthContext = { mode: "oauth"; auth: any; tokens: any; redirectUri: string };
@@ -560,7 +648,8 @@ async function startServer() {
     | OAuthAuthContext;
   type MeetAuthContext =
     | { mode: "service_account"; auth: any; facultyId?: string }
-    | { mode: "faculty_oauth"; auth: any; tokens: any; redirectUri: string; facultyId: string; email?: string | null };
+    | { mode: "faculty_oauth"; auth: any; tokens: any; redirectUri: string; facultyId: string; email?: string | null }
+    | { mode: "admin_oauth"; auth: any; tokens: any; redirectUri: string; facultyId: string; email?: string | null };
 
   const hasServiceAccountAuth = () => !!getServiceAccountCredentialsFromEnv();
   const hasMeetServiceAccountAuth = () => !!(getServiceAccountCredentialsFromEnv() && getMeetDelegatedUserFromEnv());
@@ -630,22 +719,23 @@ async function startServer() {
   };
 
   const getMeetAuthContext = (facultyId: string, req?: express.Request): MeetAuthContext => {
-    const facultyAuthData = getFacultyGoogleAuthData(facultyId);
-    if (facultyAuthData?.tokens && hasFacultyOAuthScope(facultyId, GOOGLE_MEET_CREATE_SCOPE)) {
-      const redirectUri = facultyAuthData.redirectUri || resolveOAuthRedirectUri(req);
+    // Priority 1: Admin OAuth tokens with Meet scope
+    const adminTokens = getAdminTokens();
+    if (adminTokens && hasOAuthScope(GOOGLE_MEET_CREATE_SCOPE)) {
+      const redirectUri = getAdminRedirectUri() || resolveOAuthRedirectUri(req);
       const oauth2Client = getOAuth2Client(redirectUri);
-      oauth2Client.setCredentials(facultyAuthData.tokens);
-
+      oauth2Client.setCredentials(adminTokens);
       return {
-        mode: "faculty_oauth",
+        mode: "admin_oauth",
         auth: oauth2Client,
-        tokens: facultyAuthData.tokens,
+        tokens: adminTokens,
         redirectUri,
         facultyId,
-        email: facultyAuthData.email || null,
+        email: null,
       };
     }
 
+    // Priority 2: Service account with delegated user
     const serviceAccountCredentials = getServiceAccountCredentialsFromEnv();
     const delegatedUser = getMeetDelegatedUserFromEnv();
 
@@ -660,7 +750,7 @@ async function startServer() {
     }
 
     throw new Error(
-      "Google Meet is not connected for this faculty. Connect your Google account in the Faculty Dashboard or paste a manual Google Meet link."
+      "Google Meet is not connected. Ask the admin to connect their Google account from the Admin Dashboard."
     );
   };
 
@@ -674,6 +764,13 @@ async function startServer() {
   };
 
   const persistMeetOAuthTokens = (context: MeetAuthContext) => {
+    if (context.mode === "admin_oauth") {
+      const mergedTokens = { ...context.tokens, ...context.auth.credentials };
+      if (mergedTokens.refresh_token || context.tokens.refresh_token) {
+        saveAdminTokens(mergedTokens, context.redirectUri);
+      }
+      return;
+    }
     if (context.mode !== "faculty_oauth") return;
 
     const mergedTokens = { ...context.tokens, ...context.auth.credentials };
@@ -701,6 +798,10 @@ async function startServer() {
   const clearExpiredFacultyMeetTokens = (context: MeetAuthContext | null, err: any) => {
     if (context?.mode === "faculty_oauth" && (err?.message || "").includes("invalid_grant")) {
       deleteFacultyGoogleAuthData(context.facultyId);
+      return true;
+    }
+    if (context?.mode === "admin_oauth" && (err?.message || "").includes("invalid_grant")) {
+      clearExpiredOAuthTokens("oauth", err);
       return true;
     }
     return false;
@@ -733,7 +834,7 @@ async function startServer() {
 
     try {
       authContext = getMeetAuthContext(facultyId, req);
-      if (authContext.mode === "faculty_oauth" && !authContext.email) {
+      if ((authContext.mode === "faculty_oauth" || authContext.mode === "admin_oauth") && !authContext.email) {
         try {
           authContext.email = await getGoogleAccountEmail(authContext.auth);
         } catch {
@@ -741,20 +842,10 @@ async function startServer() {
         }
       }
 
-      const connectedEmail =
-        authContext.mode === "faculty_oauth" ? normalizeEmail(authContext.email) : null;
-
-      if (
-        connectedEmail &&
-        (connectedEmail.endsWith("@gmail.com") || connectedEmail.endsWith("@googlemail.com"))
-      ) {
-        throw new Error(
-          "Personal Gmail accounts cannot create locked Google Meet rooms that require host approval. Connect a Google Workspace faculty account or paste a manual Google Meet link created from an account that supports host approval."
-        );
-      }
-
       const accessToken = await getGoogleAccessToken(authContext.auth);
-      const response = await fetch("https://meet.googleapis.com/v2/spaces", {
+
+      // Try RESTRICTED first (requires host approval), fall back to OPEN for personal accounts
+      let response = await fetch("https://meet.googleapis.com/v2/spaces", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -767,6 +858,25 @@ async function startServer() {
         }),
       });
 
+      // If RESTRICTED failed, retry with OPEN access type
+      if (!response.ok) {
+        const retryResponse = await fetch("https://meet.googleapis.com/v2/spaces", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            config: {
+              accessType: "OPEN",
+            },
+          }),
+        });
+        if (retryResponse.ok) {
+          response = retryResponse;
+        }
+      }
+
       if (!response.ok) {
         let errorMessage = `Google Meet API returned ${response.status}.`;
         try {
@@ -778,8 +888,10 @@ async function startServer() {
         }
 
         const lowered = errorMessage.toLowerCase();
-        if (response.status === 401 || response.status === 403 || lowered.includes("insufficient") || lowered.includes("scope")) {
-          throw new Error("Google Meet access is not authorized for this faculty. Reconnect your Google account in the Faculty Dashboard.");
+        if (response.status === 401 || response.status === 403 || lowered.includes("insufficient") || lowered.includes("scope") || lowered.includes("not been used") || lowered.includes("disabled") || lowered.includes("enabled")) {
+          throw new Error(
+            "Google Meet access is not authorized. Make sure the Google Meet REST API is enabled in Google Cloud Console (APIs & Services > Enable APIs > search 'Google Meet REST API'). Then have the faculty reconnect their Google account in the Faculty Dashboard."
+          );
         }
 
         throw new Error(errorMessage);
@@ -793,12 +905,6 @@ async function startServer() {
 
       if (typeof payload?.meetingUri !== "string" || !payload.meetingUri.trim()) {
         throw new Error("Google Meet API did not return a meeting link.");
-      }
-
-      if (actualAccessType && actualAccessType !== "RESTRICTED") {
-        throw new Error(
-          `Google created this meeting with access type "${actualAccessType}" instead of "RESTRICTED". Use a Google Workspace faculty account, a manual Meet link from an account that supports host approval, or adjust the account's Meet policy before auto-generating links.`
-        );
       }
 
       persistMeetOAuthTokens(authContext);
@@ -835,7 +941,7 @@ async function startServer() {
   // Admin: Get all colleges (if exists)
   app.get("/api/colleges", async (req, res) => {
     try {
-      const { data, error } = await getSupabase().from("colleges").select("*").neq("code", "ADMIN_PASS");
+      const { data, error } = await getSupabase().from("colleges").select("*");
       if (error) {
         return res.json([]); // Return empty if table doesn't exist
       }
@@ -845,22 +951,155 @@ async function startServer() {
     }
   });
 
-  // Admin: Get admin password
-  app.get("/api/admin/password", async (req, res) => {
+  // Admin: Get admin email (for Google OAuth login)
+  app.get("/api/admin/email", async (_req, res) => {
+    try {
+      const { data } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      res.json({ email: data?.value || null });
+    } catch (err: any) {
+      res.json({ email: null });
+    }
+  });
+
+  // Admin: Set admin email (for Google OAuth login)
+  app.post("/api/admin/email", async (req, res) => {
+    try {
+      const email = normalizeEmail(req.body?.email);
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: "Invalid email format" });
+      }
+      await getSupabase()
+        .from("admin_settings")
+        .upsert({ key: "admin_email", value: email }, { onConflict: "key" });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Google OAuth login URL (also connects Drive + Meet)
+  app.get("/api/admin/google/login-url", (req, res) => {
+    try {
+      const redirectUri = resolveOAuthRedirectUri(req);
+      const oauth2Client = getOAuth2Client(redirectUri);
+      const url = oauth2Client.generateAuthUrl({
+        access_type: "offline",
+        scope: [GOOGLE_USERINFO_EMAIL_SCOPE, ...GOOGLE_OAUTH_SCOPES],
+        state: encodeOAuthState({ redirectUri, role: "admin_login" }),
+        prompt: "consent",
+      });
+      res.json({ url });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Google OAuth password reset URL
+  app.get("/api/admin/google/reset-url", (req, res) => {
+    try {
+      const redirectUri = resolveOAuthRedirectUri(req);
+      const oauth2Client = getOAuth2Client(redirectUri);
+      const url = oauth2Client.generateAuthUrl({
+        access_type: "offline",
+        scope: ["https://www.googleapis.com/auth/userinfo.email"],
+        state: encodeOAuthState({ redirectUri, role: "admin_reset" }),
+        prompt: "select_account",
+      });
+      res.json({ url });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Reset password (after Google OAuth verification)
+  app.post("/api/admin/reset-password", async (req, res) => {
+    try {
+      const { email, new_password } = req.body;
+      if (!email || !new_password) {
+        return res.status(400).json({ error: "Email and new password are required" });
+      }
+      if (new_password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      }
+      // Verify the email matches stored admin email
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      if (!adminEmailRow || normalizeEmail(adminEmailRow.value) !== normalizeEmail(email)) {
+        return res.status(403).json({ error: "Email does not match admin account" });
+      }
+      // Update the password (hashed)
+      const hashed = hashPassword(new_password);
+      await getSupabase()
+        .from("admin_settings")
+        .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Verify admin password (server-side comparison, never return the password)
+  app.post("/api/admin/login", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      if (isRateLimited(`admin-login:${ip}`)) {
+        return res.status(429).json({ error: "Too many login attempts. Please try again later." });
+      }
+
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
+      if (!password.trim()) {
+        return res.status(400).json({ error: "Password is required." });
+      }
+
+      const { data, error } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      const storedPassword = (error || !data) ? "EARIST" : data.value;
+
+      if (!verifyPassword(password, storedPassword)) {
+        return res.status(401).json({ error: "Invalid admin password" });
+      }
+
+      // Migrate plaintext password to hashed on successful login
+      if (!isPasswordHashed(storedPassword) && storedPassword !== "EARIST") {
+        const hashed = hashPassword(password);
+        await getSupabase()
+          .from("admin_settings")
+          .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Check if admin password is set (does NOT return the password)
+  app.get("/api/admin/password", async (_req, res) => {
     try {
       const { data, error } = await getSupabase()
-        .from("colleges")
-        .select("name")
-        .eq("code", "ADMIN_PASS")
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
         .maybeSingle();
-      
-      if (error || !data) {
-        res.json({ password: "EARIST" });
-      } else {
-        res.json({ password: data.name });
-      }
+
+      res.json({ hasPassword: !!(data?.value && !error) });
     } catch (err: any) {
-      res.json({ password: "EARIST" });
+      res.json({ hasPassword: false });
     }
   });
 
@@ -874,22 +1113,10 @@ async function startServer() {
       if (password.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters long" });
       }
-      const { data: existing } = await getSupabase()
-        .from("colleges")
-        .select("id")
-        .eq("code", "ADMIN_PASS")
-        .maybeSingle();
-
-      if (existing) {
-        await getSupabase()
-          .from("colleges")
-          .update({ name: password })
-          .eq("code", "ADMIN_PASS");
-      } else {
-        await getSupabase()
-          .from("colleges")
-          .insert({ name: password, code: "ADMIN_PASS" });
-      }
+      const hashed = hashPassword(password);
+      await getSupabase()
+        .from("admin_settings")
+        .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -936,15 +1163,10 @@ async function startServer() {
       if (!code) {
         return res.status(400).json({ error: "College code is required." });
       }
-      if (code === "ADMIN_PASS") {
-        return res.status(400).json({ error: "College code cannot be ADMIN_PASS." });
-      }
-
       const { data, error } = await getSupabase()
         .from("colleges")
         .update({ name, code })
         .eq("id", req.params.id)
-        .neq("code", "ADMIN_PASS")
         .select()
         .single();
 
@@ -1022,24 +1244,6 @@ async function startServer() {
     }
   });
 
-  // Temporary endpoint to get queue columns
-  app.get("/api/test/queue-columns", async (req, res) => {
-    try {
-      // Fetch from a non-existent table to get the error message which might contain hints,
-      // or just fetch from a known table.
-      const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, {
-        headers: {
-          apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
-          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-        }
-      });
-      const data = await response.json();
-      res.json({ data });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // Admin: Delete college
   app.delete("/api/colleges/:id", async (req, res) => {
     try {
@@ -1078,9 +1282,10 @@ async function startServer() {
         return res.status(400).json({ error: "Password must be at least 6 characters long" });
       }
 
+      const hashed = hashPassword(password);
       const { error } = await getSupabase()
         .from("faculty")
-        .update({ password })
+        .update({ password: hashed })
         .eq("id", req.params.id);
       if (error) throw error;
       res.json({ success: true });
@@ -1110,11 +1315,12 @@ async function startServer() {
       }
       
       // Auto-generate a unique faculty code (e.g., FAC-A1B2C3)
-      const faculty_code = "FAC-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+      const faculty_code = "FAC-" + crypto.randomBytes(3).toString("hex").toUpperCase();
+      const hashedPassword = hashPassword(password);
       
       const { data, error } = await getSupabase()
         .from("faculty")
-        .insert({ id, name, full_name: name, faculty_code, department_id, email: normalizedEmail, password, status: "available" })
+        .insert({ id, name, full_name: name, faculty_code, department_id, email: normalizedEmail, password: hashedPassword, status: "available" })
         .select()
         .single();
       if (error) throw error;
@@ -1158,20 +1364,35 @@ async function startServer() {
         return res.status(400).json({ error: "Password is required." });
       }
 
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      if (isRateLimited(`faculty-login:${ip}`)) {
+        return res.status(429).json({ error: "Too many login attempts. Please try again later." });
+      }
+
       const { data, error } = await getSupabase()
         .from("faculty")
         .select("*")
-        .eq("password", password)
-        .limit(50);
+        .eq("email", normalizedEmail)
+        .maybeSingle();
 
       if (error) throw error;
 
-      const facultyMatch = (data || []).find((faculty: any) => normalizeEmail(faculty.email) === normalizedEmail);
-
-      if (!facultyMatch) {
+      if (!data || !verifyPassword(password, data.password)) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
-      res.json(facultyMatch);
+
+      // Migrate plaintext password to hashed on successful login
+      if (!isPasswordHashed(data.password)) {
+        const hashed = hashPassword(password);
+        await getSupabase()
+          .from("faculty")
+          .update({ password: hashed })
+          .eq("id", data.id);
+      }
+
+      // Return faculty data without the password
+      const { password: _pw, ...safeData } = data;
+      res.json(safeData);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1209,8 +1430,9 @@ async function startServer() {
 
       const formattedData = (facultyData || []).map((f: any) => {
         const dept = (deptData || []).find((d: any) => d.id === f.department_id);
+        const { password: _pw, ...safeFields } = f;
         return {
-          ...f,
+          ...safeFields,
           department: dept ? dept.name : "Unknown Department"
         };
       });
@@ -1265,6 +1487,49 @@ async function startServer() {
   app.post("/api/queue/join", async (req, res) => {
     try {
       const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period } = req.body;
+
+      // Check if any faculty is available before allowing student to join queue
+      const { data: allFaculty, error: facultyError } = await getSupabase()
+        .from("faculty")
+        .select("*")
+        .eq("status", "available");
+
+      if (facultyError) throw facultyError;
+
+      if (!allFaculty || allFaculty.length === 0) {
+        return res.status(503).json({ 
+          error: "No faculty members are currently available. Please try again later." 
+        });
+      }
+
+      // Check if any available faculty has today's availability slots
+      const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const todayDay = daysOfWeek[new Date().getDay()];
+      
+      let hasAvailableFacultyWithSlots = false;
+      for (const faculty of allFaculty) {
+        try {
+          const parsed = JSON.parse(faculty.full_name || "[]");
+          if (Array.isArray(parsed)) {
+            const todaySlot = parsed.find((slot: any) => slot?.day === todayDay);
+            if (todaySlot) {
+              hasAvailableFacultyWithSlots = true;
+              break;
+            }
+          }
+        } catch (e) {
+          // Ignore parsing errors, continue checking other faculty
+        }
+      }
+
+      if (!hasAvailableFacultyWithSlots) {
+        return res.status(503).json({ 
+          error: "No faculty members are currently available. Please try again later." 
+        });
+      }
+
+      // If student didn't select a specific faculty, that's okay - they'll be routed to any available faculty
+      // If faculty_id is provided, we could add additional validation here if needed
 
       // Check if student exists
       let { data: student } = await getSupabase()
@@ -1605,23 +1870,6 @@ async function startServer() {
     }
   });
 
-  // Temporary route to check constraint
-  app.get("/api/check-constraint", async (req, res) => {
-    try {
-      const { data, error } = await getSupabase()
-        .from('queue')
-        .select('status')
-        .limit(1);
-      
-      const { data: d2, error: e2 } = await getSupabase()
-        .rpc('get_constraint_def', { constraint_name: 'queue_status_check' });
-        
-      res.json({ data, error, d2, e2 });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // Faculty Action: Update Consultation Status
   app.post("/api/queue/:id/status", async (req, res) => {
     try {
@@ -1651,7 +1899,14 @@ async function startServer() {
         const time_period = parts.length > 1 ? parts[0] : (parts.length === 1 && !parts[0].startsWith('http') ? parts[0] : null);
 
         if (!finalMeetLink) {
-          finalMeetLink = await createGoogleMeetLink(consultation.faculty_id, req);
+          try {
+            finalMeetLink = await createGoogleMeetLink(consultation.faculty_id, req);
+          } catch (meetErr: any) {
+            return res.status(400).json({
+              error: meetErr.message || "Failed to generate Google Meet link.",
+              meet_required: true,
+            });
+          }
         }
 
         updates.meet_link = time_period ? `${time_period}|${finalMeetLink}` : finalMeetLink;
@@ -2001,6 +2256,24 @@ async function startServer() {
 
   scheduleDriveCleanup();
 
+  // Run Supabase recordings cleanup on startup and every hour
+  (async () => {
+    try {
+      console.log("[Supabase Cleanup] Running initial cleanup on startup...");
+      await runSupabaseRecordingsCleanup();
+    } catch (err) {
+      console.error("[Supabase Cleanup] Startup cleanup failed:", err);
+    }
+  })();
+
+  setInterval(async () => {
+    try {
+      await runSupabaseRecordingsCleanup();
+    } catch (err) {
+      console.error("[Supabase Cleanup] Periodic cleanup failed:", err);
+    }
+  }, 60 * 60 * 1000); // Run every hour
+
   app.get("/api/faculty/:id/google/status", async (req, res) => {
     try {
       const facultyId = getBodyString(req.params.id);
@@ -2009,12 +2282,15 @@ async function startServer() {
       }
 
       const stored = getFacultyGoogleAuthData(facultyId);
-      if (stored?.tokens && hasFacultyOAuthScope(facultyId, GOOGLE_MEET_CREATE_SCOPE)) {
+
+      // Check admin OAuth first
+      const adminTokens = getAdminTokens();
+      if (adminTokens && hasOAuthScope(GOOGLE_MEET_CREATE_SCOPE)) {
         return res.json({
           connected: true,
-          mode: "oauth",
-          email: stored.email || null,
-          connectedAt: stored.timestamp ? new Date(stored.timestamp).toISOString() : null,
+          mode: "admin_oauth",
+          email: null,
+          connectedAt: null,
         });
       }
 
@@ -2061,7 +2337,7 @@ async function startServer() {
       const oauth2Client = getOAuth2Client(redirectUri);
       const url = oauth2Client.generateAuthUrl({
         access_type: "offline",
-        scope: [GOOGLE_MEET_CREATE_SCOPE],
+        scope: [GOOGLE_MEET_CREATE_SCOPE, GOOGLE_USERINFO_EMAIL_SCOPE],
         state: encodeOAuthState({ redirectUri, role: "faculty", facultyId }),
         prompt: "consent",
         login_hint: normalizeEmail(facultyRecord.email),
@@ -2140,8 +2416,14 @@ async function startServer() {
       targetOrigin = "*";
     }
 
+    const escapeHtml = (str: string) =>
+      str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
     const sendOAuthResponse = (payload: Record<string, unknown>) => {
       const serializedPayload = JSON.stringify(payload);
+      const safeMessage = escapeHtml(
+        typeof payload.message === "string" ? payload.message : "Authentication complete."
+      );
       res.send(`
         <html>
           <body>
@@ -2154,7 +2436,7 @@ async function startServer() {
                 window.location.href = '/';
               }
             </script>
-            <p>${typeof payload.message === "string" ? payload.message : "Authentication complete."}</p>
+            <p>${safeMessage}</p>
           </body>
         </html>
       `);
@@ -2166,6 +2448,81 @@ async function startServer() {
       const redirectUri = stateObj.redirectUri || resolveOAuthRedirectUri(req);
       const oauth2Client = getOAuth2Client(redirectUri);
       const { tokens } = await oauth2Client.getToken(code);
+
+      // Handle admin login via Google OAuth
+      if (stateObj.role === "admin_login" || stateObj.role === "admin_reset") {
+        oauth2Client.setCredentials(tokens);
+        let accountEmail: string | null = null;
+        try {
+          accountEmail = await getGoogleAccountEmail(oauth2Client);
+        } catch (emailErr) {
+          console.warn("Admin Google email lookup failed:", emailErr);
+        }
+
+        if (!accountEmail) {
+          return sendOAuthResponse({
+            type: stateObj.role === "admin_reset" ? "ADMIN_RESET_ERROR" : "ADMIN_LOGIN_ERROR",
+            error: "Could not retrieve Google account email.",
+            message: "Could not retrieve Google account email.",
+          });
+        }
+
+        // Check if admin email is configured
+        const { data: adminEmailRow } = await getSupabase()
+          .from("admin_settings")
+          .select("value")
+          .eq("key", "admin_email")
+          .maybeSingle();
+
+        const storedAdminEmail = adminEmailRow ? normalizeEmail(adminEmailRow.value) : null;
+
+        if (stateObj.role === "admin_login") {
+          if (!storedAdminEmail) {
+            return sendOAuthResponse({
+              type: "ADMIN_LOGIN_ERROR",
+              error: "No admin email configured. Please set an admin email first from the Admin Dashboard.",
+              message: "No admin email configured.",
+            });
+          }
+          if (storedAdminEmail !== normalizeEmail(accountEmail)) {
+            return sendOAuthResponse({
+              type: "ADMIN_LOGIN_ERROR",
+              error: "This Google account is not authorized as admin.",
+              message: "This Google account is not authorized as admin.",
+            });
+          }
+          // Save tokens so admin Google account is connected for Drive + Meet
+          const mergedTokens = { ...(getAdminTokens() || {}), ...tokens };
+          saveAdminTokens(mergedTokens, redirectUri);
+
+          return sendOAuthResponse({
+            type: "ADMIN_LOGIN_SUCCESS",
+            email: accountEmail,
+            message: "Admin login successful. This window should close automatically.",
+          });
+        }
+
+        // admin_reset flow
+        if (!storedAdminEmail) {
+          return sendOAuthResponse({
+            type: "ADMIN_RESET_ERROR",
+            error: "No admin email configured. Please set an admin email first from the Admin Dashboard.",
+            message: "No admin email configured.",
+          });
+        }
+        if (storedAdminEmail !== normalizeEmail(accountEmail)) {
+          return sendOAuthResponse({
+            type: "ADMIN_RESET_ERROR",
+            error: "This Google account is not authorized as admin.",
+            message: "Unauthorized Google account.",
+          });
+        }
+        return sendOAuthResponse({
+          type: "ADMIN_RESET_SUCCESS",
+          email: accountEmail,
+          message: "Identity verified. You can now reset your password.",
+        });
+      }
 
       if (stateObj.role === "faculty" && stateObj.facultyId) {
         const facultyId = stateObj.facultyId;
@@ -2205,8 +2562,13 @@ async function startServer() {
     } catch (err: any) {
       console.error("OAuth Callback Error:", err);
       res.status(500);
+      const errorTypeMap: Record<string, string> = {
+        faculty: "FACULTY_GOOGLE_AUTH_ERROR",
+        admin_login: "ADMIN_LOGIN_ERROR",
+        admin_reset: "ADMIN_RESET_ERROR",
+      };
       sendOAuthResponse({
-        type: stateObj.role === "faculty" ? "FACULTY_GOOGLE_AUTH_ERROR" : "OAUTH_AUTH_ERROR",
+        type: errorTypeMap[stateObj.role || ""] || "OAUTH_AUTH_ERROR",
         error: err.message || "Authentication failed.",
         message: `Authentication failed: ${err.message || "Unknown error"}`,
       });

@@ -239,6 +239,11 @@ export default function Login() {
       throw new Error("Student ID is required.");
     }
 
+    // Check if any faculty is available before allowing student login
+    if (availableFaculty.length === 0) {
+      throw new Error("No faculty members are currently available. Please try again later.");
+    }
+
     if (mode === "scan") {
       // Check if student exists
       const res = await fetch(`/api/students/${encodeURIComponent(normalizedIdentifier)}`);
@@ -272,7 +277,7 @@ export default function Login() {
     } else {
       navigate(`/kiosk`);
     }
-  }, [course, navigate, studentEmail, studentName]);
+  }, [faculty, course, navigate, studentEmail, studentName]);
 
   const triggerAutoScanLogin = useCallback(async (rawScannedValue: string) => {
     const scannedValue = rawScannedValue.trim();
@@ -457,22 +462,34 @@ export default function Login() {
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              {availableFaculty.length === 0 && (
+                <div className="p-4 bg-red-50 border-2 border-red-200 rounded-2xl">
+                  <p className="text-red-700 font-semibold text-sm text-center">
+                    ⏳ No faculty members available at the moment
+                  </p>
+                  <p className="text-red-600 text-xs text-center mt-1">
+                    Please try again later or contact support.
+                  </p>
+                </div>
+              )}
               <div className="flex p-1 bg-neutral-100 rounded-xl">
                 <button
                   type="button"
                   onClick={() => { setInputMode("scan"); setError(""); }}
+                  disabled={availableFaculty.length === 0}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${
                     inputMode === "scan" ? "bg-white text-emerald-700 shadow-sm" : "text-neutral-500 hover:text-neutral-700"
-                  }`}
+                  } ${availableFaculty.length === 0 ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   <ScanLine className="w-4 h-4" /> Scan ID
                 </button>
                 <button
                   type="button"
                   onClick={() => { setInputMode("manual"); setError(""); }}
+                  disabled={availableFaculty.length === 0}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${
                     inputMode === "manual" ? "bg-white text-emerald-700 shadow-sm" : "text-neutral-500 hover:text-neutral-700"
-                  }`}
+                  } ${availableFaculty.length === 0 ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   <Keyboard className="w-4 h-4" /> Manual Input
                 </button>
@@ -480,9 +497,15 @@ export default function Login() {
 
               {inputMode === "scan" ? (
                 <div className="space-y-4">
-                  <div className="w-full h-28 sm:h-32 border-2 border-dashed border-emerald-300 rounded-2xl flex flex-col items-center justify-center bg-emerald-50 text-emerald-500 animate-pulse">
+                  <div className={`w-full h-28 sm:h-32 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center text-center transition-all ${
+                    availableFaculty.length === 0
+                      ? "border-neutral-300 bg-neutral-50 text-neutral-400"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-500 animate-pulse"
+                  }`}>
                     <ScanLine className="w-10 h-10 mb-2" />
-                    <span className="text-sm font-bold">Scan ID Here</span>
+                    <span className="text-sm font-bold">
+                      {availableFaculty.length === 0 ? "Login Unavailable" : "Scan ID Here"}
+                    </span>
                   </div>
 
                   <input
@@ -494,8 +517,13 @@ export default function Login() {
                       clearScannerBuffer();
                       setIdentifier(e.target.value);
                     }}
+                    disabled={availableFaculty.length === 0}
                     placeholder="Or type Student ID and press Enter"
-                    className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors text-lg"
+                    className={`w-full p-4 border-2 rounded-2xl bg-neutral-50 outline-none transition-colors text-lg ${
+                      availableFaculty.length === 0
+                        ? "border-neutral-200 text-neutral-400 cursor-not-allowed opacity-60"
+                        : "border-neutral-200 focus:border-emerald-500"
+                    }`}
                     required
                   />
                 </div>
@@ -505,30 +533,50 @@ export default function Login() {
                     type="text"
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
+                    disabled={availableFaculty.length === 0}
                     placeholder="Student ID (e.g. 2021-0001)"
-                    className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                    className={`w-full p-3 border-2 rounded-xl bg-neutral-50 outline-none transition-colors ${
+                      availableFaculty.length === 0
+                        ? "border-neutral-200 text-neutral-400 cursor-not-allowed opacity-60"
+                        : "border-neutral-200 focus:border-emerald-500"
+                    }`}
                     required
                   />
                   <input
                     type="text"
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
+                    disabled={availableFaculty.length === 0}
                     placeholder="Full Name"
-                    className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                    className={`w-full p-3 border-2 rounded-xl bg-neutral-50 outline-none transition-colors ${
+                      availableFaculty.length === 0
+                        ? "border-neutral-200 text-neutral-400 cursor-not-allowed opacity-60"
+                        : "border-neutral-200 focus:border-emerald-500"
+                    }`}
                     required
                   />
                   <input
                     type="email"
                     value={studentEmail}
                     onChange={(e) => setStudentEmail(e.target.value)}
+                    disabled={availableFaculty.length === 0}
                     placeholder="Email Address"
-                    className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                    className={`w-full p-3 border-2 rounded-xl bg-neutral-50 outline-none transition-colors ${
+                      availableFaculty.length === 0
+                        ? "border-neutral-200 text-neutral-400 cursor-not-allowed opacity-60"
+                        : "border-neutral-200 focus:border-emerald-500"
+                    }`}
                     required
                   />
                   <select
                     value={course}
                     onChange={(e) => setCourse(e.target.value)}
-                    className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors appearance-none"
+                    disabled={availableFaculty.length === 0}
+                    className={`w-full p-3 border-2 rounded-xl bg-neutral-50 outline-none transition-colors appearance-none ${
+                      availableFaculty.length === 0
+                        ? "border-neutral-200 text-neutral-400 cursor-not-allowed opacity-60"
+                        : "border-neutral-200 focus:border-emerald-500"
+                    }`}
                     required
                   >
                     <option value="" disabled>Select Course / Department</option>
@@ -546,7 +594,7 @@ export default function Login() {
 
           <button
             type="submit"
-            disabled={loading || !identifier}
+            disabled={loading || !identifier || availableFaculty.length === 0}
             className="w-full flex items-center justify-center gap-2 py-4 px-4 text-white text-lg font-bold rounded-2xl shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-emerald-600 hover:bg-emerald-700"
           >
             {loading ? "Please wait..." : (
