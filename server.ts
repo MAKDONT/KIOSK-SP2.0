@@ -1688,17 +1688,40 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid student ID format" });
       }
 
+      // First, look up the student by their number to get the actual UUID
+      const { data: student, error: studentError } = await getSupabase()
+        .from("students")
+        .select("id")
+        .eq("student_number", req.params.id)
+        .maybeSingle();
+
+      if (studentError) {
+        console.error("Student lookup error:", studentError);
+        return res.status(500).json({ error: "Failed to lookup student" });
+      }
+
+      if (!student) {
+        return res.status(404).json({ error: "Student not found" });
+      }
+
+      // Now query the queue using the actual student UUID
       const { data, error } = await getSupabase()
         .from("queue")
         .select("id")
-        .eq("student_id", req.params.id)
+        .eq("student_id", student.id)
         .in("status", ["waiting", "next", "serving", "ongoing"])
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      if (error) throw error;
-      if (!data) return res.status(404).json({ error: "No active queue found" });
+      if (error) {
+        console.error("Queue lookup error:", error);
+        return res.status(500).json({ error: "Failed to lookup queue" });
+      }
+
+      if (!data) {
+        return res.status(404).json({ error: "No active queue found" });
+      }
       
       res.json(data);
     } catch (err: any) {
@@ -1919,53 +1942,50 @@ async function startServer() {
 
       const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period } = req.body;
 
-      // Check if any faculty is available before allowing student to join queue
+      // Get ALL faculty (regardless of status) to check availability slots
+      // Faculty availability should be visible even if they're currently in a consultation/busy
       const { data: allFaculty, error: facultyError } = await getSupabase()
         .from("faculty")
-        .select("*")
-        .eq("status", "available");
+        .select("*");
 
       if (facultyError) throw facultyError;
 
       if (!allFaculty || allFaculty.length === 0) {
         return res.status(503).json({ 
-          error: "No faculty members are currently available. Please try again later." 
+          error: "No faculty members registered in the system. Please try again later." 
         });
       }
 
-      // Check if any available faculty has today's availability slots
-      // Note: Availability might be stored in full_name column as JSON, or may not be set yet
-      // If no availability is configured, we still allow queue joins as long as faculty status is "available"
+      // Check if any faculty has today's availability slots configured
+      // Faculty with availability slots are shown on kiosk regardless of their current status
+      // This allows students to see and queue for faculty even during consultations
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const todayDay = daysOfWeek[new Date().getDay()];
       
-      let hasValidAvailabilityData = false;
-      let hasAvailableFacultyWithSlots = false;
+      let hasFacultyWithAvailabilitySlots = false;
       
       for (const faculty of allFaculty) {
         try {
           // Try to parse full_name as availability JSON (if it's been set via /api/faculty/:id/availability)
           const parsed = JSON.parse(faculty.full_name || "[]");
           if (Array.isArray(parsed) && parsed.length > 0) {
-            // Availability data is configured for this faculty
-            hasValidAvailabilityData = true;
+            // Check if this faculty has a slot for today
             const todaySlot = parsed.find((slot: any) => slot?.day === todayDay);
             if (todaySlot) {
-              hasAvailableFacultyWithSlots = true;
+              hasFacultyWithAvailabilitySlots = true;
               break;
             }
           }
         } catch (e) {
-          // full_name is not JSON (contains faculty name instead) - availability not configured via API
+          // full_name is not JSON (contains faculty name instead) - availability not configured
           // This is normal for faculty who haven't set their availability yet
         }
       }
 
-      // If no faculty have configured availability, allow queue joins as long as faculty are available
-      // If some faculty have configured availability, require at least one with today's slot
-      if (hasValidAvailabilityData && !hasAvailableFacultyWithSlots) {
+      // If no faculty have any availability slots configured, prevent queueing
+      if (!hasFacultyWithAvailabilitySlots) {
         return res.status(503).json({ 
-          error: "No faculty members are currently available for today. Please try again later." 
+          error: "No faculty members have availability slots configured for today. Please try again later." 
         });
       }
 
@@ -2147,14 +2167,39 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid email format." });
       }
 
+      // First, fetch the current faculty data to preserve availability if it exists
+      const { data: currentFaculty, error: fetchError } = await getSupabase()
+        .from("faculty")
+        .select("full_name")
+        .eq("id", req.params.id)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      // Check if full_name contains JSON availability data
+      let fullNameToSave = name;
+      if (currentFaculty?.full_name) {
+        try {
+          const parsed = JSON.parse(currentFaculty.full_name);
+          // If it's an array (availability data), preserve it
+          if (Array.isArray(parsed)) {
+            fullNameToSave = JSON.stringify(parsed);
+          }
+        } catch (e) {
+          // If it's not valid JSON, it's just the faculty name, so keep the new name
+          fullNameToSave = name;
+        }
+      }
+
       const { data, error } = await getSupabase()
         .from("faculty")
-        .update({ name, full_name: name, email })
+        .update({ name, full_name: fullNameToSave, email })
         .eq("id", req.params.id)
         .select()
         .single();
       if (error) throw error;
 
+      await logAudit("faculty_updated", { faculty_id: req.params.id, name, email }, req);
       res.json(data);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2316,7 +2361,7 @@ async function startServer() {
   app.post("/api/queue/:id/status", async (req, res) => {
     try {
       // Input validation
-      const { status, meet_link } = req.body;
+      const { status, meet_link, recording_enabled } = req.body;
       const consultationId = req.params.id;
       
       if (!status || typeof status !== "string") {
@@ -2326,6 +2371,15 @@ async function startServer() {
       const validStatuses = ["waiting", "serving", "completed", "cancelled"];
       if (!validStatuses.includes(status.toLowerCase())) {
         return res.status(400).json({ error: "Invalid status value" });
+      }
+
+      // ===== AUDIO RECORDING REQUIREMENT =====
+      // When starting a consultation (status === "serving"), audio recording must be enabled
+      if (status === "serving" && recording_enabled !== true) {
+        return res.status(400).json({ 
+          error: "Audio recording is mandatory to start a consultation. Please enable recording and try again.",
+          recording_required: true
+        });
       }
 
       const { data: consultation, error: fetchError } = await getSupabase()
@@ -2362,6 +2416,9 @@ async function startServer() {
         }
 
         updates.meet_link = time_period ? `${time_period}|${finalMeetLink}` : finalMeetLink;
+        // Store that recording is enabled for this consultation
+        updates.recording_enabled = true;
+        
         // Automatically set faculty to busy
         await getSupabase()
           .from("faculty")
@@ -2392,10 +2449,29 @@ async function startServer() {
         }
       }
 
-      const { error: updateError } = await getSupabase()
+      let { error: updateError } = await getSupabase()
         .from("queue")
         .update(updates)
         .eq("id", consultationId);
+
+      if (updateError) {
+        const updateMessage = String(updateError.message || "").toLowerCase();
+        const missingRecordingEnabledColumn =
+          updateMessage.includes("recording_enabled") &&
+          (updateMessage.includes("schema cache") || updateMessage.includes("column"));
+
+        if (missingRecordingEnabledColumn) {
+          console.warn("Queue status update fallback: 'recording_enabled' column not found. Retrying without recording flag persistence.");
+          delete updates.recording_enabled;
+
+          const retry = await getSupabase()
+            .from("queue")
+            .update(updates)
+            .eq("id", consultationId);
+
+          updateError = retry.error;
+        }
+      }
 
       if (updateError) throw updateError;
 
@@ -2447,6 +2523,12 @@ async function startServer() {
           );
         }
       }
+
+      await logAudit("consultation_status_updated", { 
+        consultation_id: consultationId, 
+        new_status: status,
+        recording_enabled: recording_enabled === true
+      }, req);
 
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
       res.json({ success: true, meet_link: final_email_link || null });

@@ -402,9 +402,7 @@ export default function Login() {
     }
   };
 
-  const availableFaculty = faculty.filter((f) => (
-    f.status === "available" && getTodayAvailabilitySlots(f).length > 0
-  ));
+  const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
   const servingStudents = liveQueue.filter((item) => item.status === "serving");
   const nextStudents = liveQueue.filter((item) => item.status === "next");
   const waitingStudents = liveQueue.filter((item) => item.status === "waiting");
@@ -431,15 +429,35 @@ export default function Login() {
             {availableFaculty.length === 0 ? (
               <div className="text-center py-6 text-neutral-500 bg-neutral-50 rounded-2xl border border-neutral-200">
                 <Users className="w-10 h-10 text-neutral-300 mx-auto mb-2" />
-                <p className="text-sm">No faculty members are currently available.</p>
+                <p className="text-sm">No faculty members have availability for today.</p>
               </div>
             ) : (
               <div className="space-y-3">
                 {availableFaculty.map(f => (
-                  <div key={f.id} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl">
-                    <h3 className="font-bold text-emerald-900">{f.name}</h3>
-                    <p className="text-sm text-emerald-700">{f.department}</p>
-                    <div className="mt-2 text-sm font-medium text-emerald-800 flex items-center gap-1">
+                  <div
+                    key={f.id}
+                    className={`p-4 rounded-2xl border ${
+                      f.status === "busy"
+                        ? "bg-amber-50 border-amber-100"
+                        : "bg-emerald-50 border-emerald-100"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className={`font-bold ${f.status === "busy" ? "text-amber-900" : "text-emerald-900"}`}>{f.name}</h3>
+                        <p className={`text-sm ${f.status === "busy" ? "text-amber-700" : "text-emerald-700"}`}>{f.department}</p>
+                      </div>
+                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                        f.status === "busy"
+                          ? "bg-amber-100 text-amber-800"
+                          : f.status === "offline"
+                            ? "bg-neutral-200 text-neutral-700"
+                            : "bg-emerald-100 text-emerald-800"
+                      }`}>
+                        {f.status}
+                      </span>
+                    </div>
+                    <div className={`mt-2 text-sm font-medium flex items-center gap-1 ${f.status === "busy" ? "text-amber-800" : "text-emerald-800"}`}>
                       <Clock className="w-4 h-4" />
                       {getAvailabilityRange(f)}
                     </div>
@@ -465,7 +483,7 @@ export default function Login() {
               {availableFaculty.length === 0 && (
                 <div className="p-4 bg-red-50 border-2 border-red-200 rounded-2xl">
                   <p className="text-red-700 font-semibold text-sm text-center">
-                    ⏳ No faculty members available at the moment
+                     No faculty members have availability at the moment
                   </p>
                   <p className="text-red-600 text-xs text-center mt-1">
                     Please try again later or contact support.

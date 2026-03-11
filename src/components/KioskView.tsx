@@ -471,17 +471,37 @@ export default function KioskView() {
             Live Monitor
           </h2>
           <div className="flex-1 overflow-y-auto space-y-4 pr-0 sm:pr-2">
-            {availableFaculty.filter(f => f.status === 'available').length === 0 ? (
+            {availableFaculty.length === 0 ? (
               <div className="text-center py-8 text-neutral-500">
                 <Users className="w-12 h-12 text-neutral-300 mx-auto mb-3" />
-                <p>No faculty members are currently available.</p>
+                <p>No faculty members have availability today.</p>
               </div>
             ) : (
-              availableFaculty.filter(f => f.status === 'available').map(f => (
-                <div key={f.id} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl">
-                  <h3 className="font-bold text-emerald-900">{f.name}</h3>
-                  <p className="text-sm text-emerald-700">{f.department}</p>
-                  <div className="mt-2 text-sm font-medium text-emerald-800 flex items-center gap-1">
+              availableFaculty.map(f => (
+                <div
+                  key={f.id}
+                  className={`p-4 rounded-2xl border ${
+                    f.status === 'busy'
+                      ? 'bg-amber-50 border-amber-100'
+                      : 'bg-emerald-50 border-emerald-100'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className={`font-bold ${f.status === 'busy' ? 'text-amber-900' : 'text-emerald-900'}`}>{f.name}</h3>
+                      <p className={`text-sm ${f.status === 'busy' ? 'text-amber-700' : 'text-emerald-700'}`}>{f.department}</p>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                      f.status === 'busy'
+                        ? 'bg-amber-100 text-amber-800'
+                        : f.status === 'offline'
+                          ? 'bg-neutral-200 text-neutral-700'
+                          : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {f.status}
+                    </span>
+                  </div>
+                  <div className={`mt-2 text-sm font-medium flex items-center gap-1 ${f.status === 'busy' ? 'text-amber-800' : 'text-emerald-800'}`}>
                     <Clock className="w-4 h-4" />
                     {getAvailabilityRange(f)}
                   </div>

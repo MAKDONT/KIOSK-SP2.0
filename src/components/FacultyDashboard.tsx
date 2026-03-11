@@ -221,6 +221,8 @@ export default function FacultyDashboard() {
   const [googleMeetEmail, setGoogleMeetEmail] = useState<string | null>(null);
   const [googleMeetConnectedAt, setGoogleMeetConnectedAt] = useState<string | null>(null);
   const [googleMeetLoading, setGoogleMeetLoading] = useState(false);
+  const [showAudioPermissionModal, setShowAudioPermissionModal] = useState(false);
+  const [audioPermissionCallback, setAudioPermissionCallback] = useState<((granted: boolean) => void) | null>(null);
 
   const fetchGoogleMeetStatus = async () => {
     if (!selectedFaculty) return;
@@ -609,19 +611,25 @@ export default function FacultyDashboard() {
     });
   };
 
-  const updateStatus = async (id: number, status: string, link?: string, autoCallNext: boolean = false) => {
+  const updateStatus = async (id: number, status: string, link?: string, autoCallNext: boolean = false, recordingEnabled: boolean = false) => {
     try {
       const res = await fetch(`/api/queue/${id}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, meet_link: link }),
+        body: JSON.stringify({ status, meet_link: link, recording_enabled: recordingEnabled }),
       });
 
       const payload = await res.json();
       
       if (!res.ok) {
         console.error("Failed to update status:", payload);
-        throw new Error(payload.error || "Failed to update consultation status.");
+        const error = new Error(payload.error || "Failed to update consultation status.") as Error & {
+          meetRequired?: boolean;
+          recordingRequired?: boolean;
+        };
+        error.meetRequired = payload.meet_required === true;
+        error.recordingRequired = payload.recording_required === true;
+        throw error;
       }
       
       if (status === "completed" || status === "cancelled") {
@@ -649,6 +657,36 @@ export default function FacultyDashboard() {
       console.error("Failed to update status", err);
       throw err instanceof Error ? err : new Error("Failed to update consultation status.");
     }
+  };
+
+  const requestAudioPermission = (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      setAudioPermissionCallback(() => resolve);
+      setShowAudioPermissionModal(true);
+    });
+  };
+
+  const handleAudioPermissionAllow = async () => {
+    try {
+      const microphoneStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+      // Stop the stream immediately since we just wanted to check permission
+      microphoneStream.getTracks().forEach((track) => track.stop());
+      
+      setShowAudioPermissionModal(false);
+      audioPermissionCallback?.(true);
+    } catch (err) {
+      console.error("Microphone permission denied:", err);
+      setShowAudioPermissionModal(false);
+      audioPermissionCallback?.(false);
+    }
+  };
+
+  const handleAudioPermissionDeny = () => {
+    setShowAudioPermissionModal(false);
+    audioPermissionCallback?.(false);
   };
 
   const handleStartSession = async (id: number, existingLink?: string) => {
@@ -682,15 +720,22 @@ export default function FacultyDashboard() {
         ...current,
         [id]: true,
       }));
-      alert("Connect your Google account in Integrations or paste a manual Google Meet link before starting the consultation.");
+      alert("Paste a manual Google Meet link before starting the consultation, or configure automatic Meet link generation in Integrations.");
       return;
     }
 
     setStartingSessionId(id);
 
     try {
+      // Step 0: Request audio recording permission before starting consultation
+      const audioPermissionGranted = await requestAudioPermission();
+      if (!audioPermissionGranted) {
+        setStartingSessionId(null);
+        return;
+      }
+
       // Step 1: Update status and get the meet link from the server FIRST
-      const data = await updateStatus(id, "serving", draftLink ? finalLink : undefined);
+      const data = await updateStatus(id, "serving", finalLink || undefined, false, true);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
@@ -720,15 +765,18 @@ export default function FacultyDashboard() {
       discardRecordingOnStopRef.current = true;
       stopAudioRecording();
       closeSessionWindow();
-      setManualMeetFallbackOpen((current) => ({
-        ...current,
-        [id]: true,
-      }));
+      const startError = err as Error & { meetRequired?: boolean; recordingRequired?: boolean };
+      if (startError.meetRequired) {
+        setManualMeetFallbackOpen((current) => ({
+          ...current,
+          [id]: true,
+        }));
+      }
 
       const baseMessage = err instanceof Error ? err.message : "Failed to start consultation.";
-      const message = draftLink
-        ? baseMessage
-        : `${baseMessage}\nConnect your Google account in Integrations or paste a manual Google Meet link and try again.`;
+      const message = startError.meetRequired
+        ? `${baseMessage}\nPaste a manual Google Meet link and try again.`
+        : baseMessage;
       alert(message);
     } finally {
       setStartingSessionId(null);
@@ -969,7 +1017,7 @@ export default function FacultyDashboard() {
                               : "border-blue-100 bg-blue-50 text-blue-800"
                           }`}>
                             {googleMeetMode === "none"
-                              ? "Connect your Google account in Integrations or paste a manual Google Meet link before starting."
+                              ? "Paste a manual Google Meet link before starting, or configure automatic Meet link generation in Integrations."
                               : "Google Meet link will be generated automatically when you start the consultation."}
                           </div>
                         )}
@@ -1218,6 +1266,50 @@ export default function FacultyDashboard() {
                   Save Changes
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAudioPermissionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl flex flex-col gap-6">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
+                <svg className="w-6 h-6 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-neutral-900">Enable Audio Recording</h2>
+            </div>
+            
+            <p className="text-neutral-600 leading-relaxed">
+              Audio recording is mandatory for all consultations. Please enable microphone access to proceed with this consultation.
+            </p>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <p className="text-sm text-blue-800">
+                <strong>Your browser will ask for microphone permission.</strong> Click "Allow" when prompted to continue with the consultation.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                onClick={handleAudioPermissionDeny}
+                className="px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors order-2 sm:order-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAudioPermissionAllow}
+                className="px-6 py-3 bg-indigo-600 text-white font-medium rounded-xl hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 order-1 sm:order-2 flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M8 16.5a1 1 0 11-2 0 1 1 0 012 0zM15 7a2 2 0 11-4 0 2 2 0 014 0z" />
+                  <path fillRule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+                Allow Microphone
+              </button>
             </div>
           </div>
         </div>

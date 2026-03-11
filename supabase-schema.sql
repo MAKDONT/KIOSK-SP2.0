@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS queue (
   start_time TIMESTAMPTZ,
   end_time TIMESTAMPTZ,
   meet_link TEXT,
+  recording_enabled BOOLEAN DEFAULT FALSE,
   source TEXT, -- kiosk, web
   purpose TEXT
 );
