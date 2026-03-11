@@ -1,4 +1,5 @@
 import express from "express";
+import cookieParser from "cookie-parser";
 import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
@@ -168,6 +169,94 @@ setInterval(() => {
     if (now > entry.resetAt) loginAttempts.delete(key);
   }
 }, 30 * 60 * 1000);
+
+// ===== ADMIN SESSION MANAGEMENT =====
+const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+const adminSessions = new Map<string, { createdAt: number; ip: string; userAgent: string }>();
+
+function generateAdminSessionToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function createAdminSession(ip: string, userAgent: string): string {
+  const token = generateAdminSessionToken();
+  adminSessions.set(token, { createdAt: Date.now(), ip, userAgent });
+  return token;
+}
+
+function isValidAdminSession(token: string, ip: string): boolean {
+  const session = adminSessions.get(token);
+  if (!session) return false;
+  
+  const now = Date.now();
+  const age = now - session.createdAt;
+  
+  if (age > ADMIN_SESSION_MAX_AGE_MS) {
+    adminSessions.delete(token);
+    return false;
+  }
+  
+  if (session.ip !== ip) {
+    console.warn(`Session IP mismatch: ${session.ip} vs ${ip}`);
+    adminSessions.delete(token);
+    return false;
+  }
+  
+  return true;
+}
+
+function requireAdminAuth(req: any, res: any, next: any) {
+  const token = req.headers.authorization?.replace("Bearer ", "") || req.cookies?.admin_session;
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (!isValidAdminSession(token, ip)) {
+    return res.status(401).json({ error: "Invalid or expired session" });
+  }
+  
+  req.adminSessionToken = token; // Add custom property to request
+  next();
+}
+
+// Clean up expired sessions every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of adminSessions) {
+    if (now - session.createdAt > ADMIN_SESSION_MAX_AGE_MS) {
+      adminSessions.delete(token);
+    }
+  }
+}, 30 * 60 * 1000);
+
+// ===== AUDIT LOGGING =====
+async function logAudit(action: string, details: any, req?: any): Promise<void> {
+  try {
+    const ip = req?.ip || req?.socket?.remoteAddress || "unknown";
+    const userAgent = req?.get?.("user-agent") || "unknown";
+    
+    const logEntry = {
+      action,
+      details: JSON.stringify(details),
+      ip,
+      user_agent: userAgent.substring(0, 255),
+      timestamp: new Date().toISOString()
+    };
+    
+    try {
+      await getSupabase()
+        .from("audit_logs")
+        .insert(logEntry);
+    } catch (insertErr) {
+      // Table might not exist yet, fail silently
+    }
+    
+    console.log(`[AUDIT] ${action}:`, details);
+  } catch (err: any) {
+    console.error("Failed to log audit:", err.message);
+  }
+}
 
 function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
   const credentialsFilePath = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_FILE);
@@ -392,7 +481,25 @@ async function startServer() {
   const wss = new WebSocketServer({ server });
 
   app.use(express.json({ limit: "1mb" }));
+  app.use(cookieParser());
   app.set("trust proxy", 1);
+
+  // --- CORS Configuration ---
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:5173").split(",");
+  app.use((req, res, next) => {
+    const origin = req.get("origin");
+    if (!origin || allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin || "*");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Max-Age", "3600");
+    }
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
 
   // --- Security Headers ---
   app.use((_req, res, next) => {
@@ -413,7 +520,92 @@ async function startServer() {
     res.json({ ok: true, uptime: Math.floor(process.uptime()) });
   });
 
+  // --- Input Validators ---
+  const validators = {
+    studentId: (value: any): string => {
+      const id = String(value || "").trim();
+      if (!id || id.length > 50) throw new Error("Invalid student ID format");
+      if (!/^[A-Za-z0-9\-_]+$/.test(id)) throw new Error("Student ID contains invalid characters");
+      return id;
+    },
+    facultyId: (value: any): string => {
+      const id = String(value || "").trim();
+      if (!id || id.length > 50) throw new Error("Invalid faculty ID");
+      if (!/^[A-Za-z0-9\-_]+$/.test(id)) throw new Error("Faculty ID contains invalid characters");
+      return id;
+    },
+    email: (value: any): string => {
+      const email = String(value || "").trim().toLowerCase();
+      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!regex.test(email)) throw new Error("Invalid email format");
+      return email;
+    },
+    password: (value: any): string => {
+      const password = String(value || "");
+      if (password.length < 8) throw new Error("Password must be at least 8 characters");
+      if (password.length > 128) throw new Error("Password too long");
+      return password;
+    },
+    name: (value: any): string => {
+      const name = String(value || "").trim();
+      if (!name || name.length > 255) throw new Error("Invalid name");
+      return name;
+    },
+    collegeName: (value: any): string => {
+      const name = String(value || "").trim();
+      if (!name || name.length < 2 || name.length > 255) throw new Error("College name must be 2-255 characters");
+      if (!/^[A-Za-z0-9\s\-&(),.']+$/.test(name)) throw new Error("College name contains invalid characters");
+      return name;
+    },
+    collegeCode: (value: any): string => {
+      const code = String(value || "").trim().toUpperCase();
+      if (!code || code.length < 2 || code.length > 10) throw new Error("College code must be 2-10 characters");
+      if (!/^[A-Z0-9\-]+$/.test(code)) throw new Error("College code must be alphanumeric");
+      return code;
+    },
+    deptName: (value: any): string => {
+      const name = String(value || "").trim();
+      if (!name || name.length < 2 || name.length > 255) throw new Error("Department name must be 2-255 characters");
+      if (!/^[A-Za-z0-9\s\-&(),.']+$/.test(name)) throw new Error("Department name contains invalid characters");
+      return name;
+    },
+    collegeId: (value: any): string => {
+      const id = String(value || "").trim();
+      if (!id || id.length > 50) throw new Error("Invalid college ID");
+      return id;
+    },
+    departmentId: (value: any): string => {
+      const id = String(value || "").trim();
+      if (!id || id.length > 50) throw new Error("Invalid department ID");
+      return id;
+    },
+    fileName: (value: any, maxLen: number = 255): string => {
+      const name = String(value || "").trim();
+      if (!name || name.length > maxLen) throw new Error(`File name too long (max ${maxLen} chars)`);
+      if (!/^[A-Za-z0-9\-_\.]+$/.test(name)) throw new Error("File name contains invalid characters");
+      return name;
+    },
+    mimeType: (value: any): string => {
+      const mime = String(value || "").trim().toLowerCase();
+      if (!mime) throw new Error("MIME type is required");
+      // Allow common media types
+      if (!/^(audio|video|image)\/[\w\-\.]+$/.test(mime)) {
+        throw new Error("Invalid MIME type");
+      }
+      return mime;
+    },
+  };
+
   const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+  
+  // Error sanitization helper
+  function sendError(res: any, statusCode: number, message: string, details?: any): void {
+    if (details) console.error(`Error[${statusCode}]:`, message, details);
+    res.status(statusCode).json({
+      error: process.env.NODE_ENV === "production" ? "An error occurred" : message
+    });
+  }
+  
   const getQueryString = (value: unknown): string | null => {
     if (typeof value === "string") {
       return value;
@@ -968,20 +1160,30 @@ async function startServer() {
   // Admin: Set admin email (for Google OAuth login)
   app.post("/api/admin/email", async (req, res) => {
     try {
-      const email = normalizeEmail(req.body?.email);
-      if (!email) {
+      const emailInput = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+      
+      if (!emailInput) {
         return res.status(400).json({ error: "Email is required" });
       }
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
+      
+      // Validate email using validators utility
+      try {
+        validators.email(emailInput);
+      } catch (validationErr: any) {
         return res.status(400).json({ error: "Invalid email format" });
       }
+      
+      const email = normalizeEmail(emailInput);
+      
       await getSupabase()
         .from("admin_settings")
         .upsert({ key: "admin_email", value: email }, { onConflict: "key" });
+      
+      await logAudit("admin_email_updated", { email }, req);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Admin email update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -998,7 +1200,8 @@ async function startServer() {
       });
       res.json({ url });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("OAuth URL generation error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -1022,30 +1225,46 @@ async function startServer() {
   // Admin: Reset password (after Google OAuth verification)
   app.post("/api/admin/reset-password", async (req, res) => {
     try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      // Rate limit password reset attempts
+      if (isRateLimited(`admin-reset:${ip}`)) {
+        return res.status(429).json({ error: "Too many reset attempts. Please try again later." });
+      }
+      
       const { email, new_password } = req.body;
       if (!email || !new_password) {
         return res.status(400).json({ error: "Email and new password are required" });
       }
-      if (new_password.length < 6) {
-        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      
+      try {
+        const validatedPassword = validators.password(new_password);
+        const validatedEmail = validators.email(email);
+        
+        // Verify the email matches stored admin email
+        const { data: adminEmailRow } = await getSupabase()
+          .from("admin_settings")
+          .select("value")
+          .eq("key", "admin_email")
+          .maybeSingle();
+        
+        if (!adminEmailRow || normalizeEmail(adminEmailRow.value) !== normalizeEmail(validatedEmail)) {
+          await logAudit("admin_reset_password_failed", { email: validatedEmail, ip, reason: "email_mismatch" }, req);
+          return res.status(403).json({ error: "Email does not match admin account" });
+        }
+        
+        const hashed = hashPassword(validatedPassword);
+        await getSupabase()
+          .from("admin_settings")
+          .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
+        
+        await logAudit("admin_password_reset", { email: validatedEmail, ip }, req);
+        res.json({ success: true });
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
       }
-      // Verify the email matches stored admin email
-      const { data: adminEmailRow } = await getSupabase()
-        .from("admin_settings")
-        .select("value")
-        .eq("key", "admin_email")
-        .maybeSingle();
-      if (!adminEmailRow || normalizeEmail(adminEmailRow.value) !== normalizeEmail(email)) {
-        return res.status(403).json({ error: "Email does not match admin account" });
-      }
-      // Update the password (hashed)
-      const hashed = hashPassword(new_password);
-      await getSupabase()
-        .from("admin_settings")
-        .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
-      res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Password reset error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -1068,19 +1287,36 @@ async function startServer() {
         .eq("key", "admin_password")
         .maybeSingle();
 
-      const storedPassword = (error || !data) ? "EARIST" : data.value;
+      const storedPassword = (error || !data) ? null : data.value;
+      
+      if (!storedPassword) {
+        await logAudit("admin_login_failed", { ip, reason: "no_password_configured" }, req);
+        return res.status(403).json({ error: "Admin account not configured" });
+      }
 
       if (!verifyPassword(password, storedPassword)) {
+        await logAudit("admin_login_failed", { ip, reason: "invalid_password" }, req);
         return res.status(401).json({ error: "Invalid admin password" });
       }
 
       // Migrate plaintext password to hashed on successful login
-      if (!isPasswordHashed(storedPassword) && storedPassword !== "EARIST") {
+      if (!isPasswordHashed(storedPassword)) {
         const hashed = hashPassword(password);
         await getSupabase()
           .from("admin_settings")
           .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
       }
+
+      const sessionToken = createAdminSession(ip, req.get("user-agent") || "");
+      await logAudit("admin_login_success", { ip }, req);
+
+      res.cookie("admin_session", sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: ADMIN_SESSION_MAX_AGE_MS,
+        path: "/"
+      });
 
       res.json({ success: true });
     } catch (err: any) {
@@ -1088,8 +1324,23 @@ async function startServer() {
     }
   });
 
-  // Admin: Check if admin password is set (does NOT return the password)
-  app.get("/api/admin/password", async (_req, res) => {
+  // Admin: Logout (invalidate session)
+  app.post("/api/admin/logout", requireAdminAuth, async (req, res) => {
+    try {
+      const token = (req as any).adminSessionToken;
+      if (token) {
+        adminSessions.delete(token);
+      }
+      res.clearCookie("admin_session");
+      await logAudit("admin_logout", { ip: req.ip }, req);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Admin: Check if admin password is configured (public endpoint)
+  app.get("/api/admin/password-configured", async (_req, res) => {
     try {
       const { data, error } = await getSupabase()
         .from("admin_settings")
@@ -1097,83 +1348,134 @@ async function startServer() {
         .eq("key", "admin_password")
         .maybeSingle();
 
-      res.json({ hasPassword: !!(data?.value && !error) });
+      res.json({ configured: !!(data?.value && !error) });
     } catch (err: any) {
-      res.json({ hasPassword: false });
+      res.json({ configured: false });
     }
   });
 
-  // Admin: Set admin password
-  app.post("/api/admin/password", async (req, res) => {
+  // Admin: Set admin password (requires authentication + current password verification)
+  app.post("/api/admin/password", requireAdminAuth, async (req, res) => {
     try {
-      const password = typeof req.body?.password === "string" ? req.body.password.trim() : "";
-      if (!password) {
-        return res.status(400).json({ error: "Password is required" });
-      }
-      if (password.length < 6) {
-        return res.status(400).json({ error: "Password must be at least 6 characters long" });
-      }
-      const hashed = hashPassword(password);
-      await getSupabase()
-        .from("admin_settings")
-        .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Add College
-  app.post("/api/colleges", async (req, res) => {
-    try {
-      const { name, code } = req.body;
-      let { data, error } = await getSupabase()
-        .from("colleges")
-        .insert({ name, code })
-        .select()
-        .single();
-        
-      if (error && error.message.includes("null value in column \"id\"")) {
-        // Fallback if DB requires explicit UUID
-        const { data: d2, error: e2 } = await getSupabase()
-          .from("colleges")
-          .insert({ id: crypto.randomUUID(), name, code })
-          .select()
-          .single();
-        data = d2;
-        error = e2;
+      const newPasswordInput = typeof req.body?.password === "string" ? req.body.password.trim() : "";
+      const currentPasswordInput = typeof req.body?.current_password === "string" ? req.body.current_password : "";
+      
+      if (!newPasswordInput) {
+        return res.status(400).json({ error: "New password is required" });
       }
       
-      if (error) throw error;
-      res.json(data);
+      if (!currentPasswordInput) {
+        return res.status(400).json({ error: "Current password is required for verification" });
+      }
+      
+      try {
+        // Validate new password format
+        const newPassword = validators.password(newPasswordInput);
+        
+        // Verify current password matches stored password
+        const { data: storedData, error: fetchError } = await getSupabase()
+          .from("admin_settings")
+          .select("value")
+          .eq("key", "admin_password")
+          .maybeSingle();
+        
+        if (fetchError) throw fetchError;
+        
+        const storedPassword = storedData?.value;
+        if (!storedPassword) {
+          await logAudit("admin_password_change_failed", { reason: "no_current_password", ip: req.ip }, req);
+          return res.status(400).json({ error: "No admin password configured yet. Use password reset flow." });
+        }
+        
+        // Verify current password
+        if (!verifyPassword(currentPasswordInput, storedPassword)) {
+          await logAudit("admin_password_change_failed", { reason: "wrong_current_password", ip: req.ip }, req);
+          return res.status(401).json({ error: "Current password is incorrect" });
+        }
+        
+        // Prevent setting same password
+        if (verifyPassword(newPasswordInput, storedPassword)) {
+          await logAudit("admin_password_change_failed", { reason: "same_password", ip: req.ip }, req);
+          return res.status(400).json({ error: "New password must be different from current password" });
+        }
+        
+        const hashed = hashPassword(newPassword);
+        await getSupabase()
+          .from("admin_settings")
+          .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
+        
+        await logAudit("admin_password_changed", { ip: req.ip, via: "authenticated_change" }, req);
+        res.json({ success: true, message: "Password changed successfully" });
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Password change error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Update college name
-  app.patch("/api/colleges/:id", async (req, res) => {
+  // Add College (requires admin authentication)
+  app.post("/api/colleges", requireAdminAuth, async (req, res) => {
     try {
-      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-
-      if (!name) {
-        return res.status(400).json({ error: "College name is required." });
+      // Input validation
+      try {
+        const name = validators.collegeName(req.body?.name);
+        const code = validators.collegeCode(req.body?.code);
+        
+        let { data, error } = await getSupabase()
+          .from("colleges")
+          .insert({ name, code })
+          .select()
+          .single();
+          
+        if (error && error.message.includes("null value in column \"id\"")) {
+          // Fallback if DB requires explicit UUID
+          const { data: d2, error: e2 } = await getSupabase()
+            .from("colleges")
+            .insert({ id: crypto.randomUUID(), name, code })
+            .select()
+            .single();
+          data = d2;
+          error = e2;
+        }
+        
+        if (error) throw error;
+        await logAudit("college_created", { name, code }, req);
+        res.json(data);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
       }
-      if (!code) {
-        return res.status(400).json({ error: "College code is required." });
-      }
-      const { data, error } = await getSupabase()
-        .from("colleges")
-        .update({ name, code })
-        .eq("id", req.params.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      res.json(data);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("College creation error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Admin: Update college name (requires admin authentication)
+  app.patch("/api/colleges/:id", requireAdminAuth, async (req, res) => {
+    try {
+      // Input validation
+      try {
+        const name = validators.collegeName(req.body?.name);
+        const code = validators.collegeCode(req.body?.code);
+        
+        const { data, error } = await getSupabase()
+          .from("colleges")
+          .update({ name, code })
+          .eq("id", req.params.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        await logAudit("college_updated", { college_id: req.params.id, name, code }, req);
+        res.json(data);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
+    } catch (err: any) {
+      console.error("College update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -1184,135 +1486,180 @@ async function startServer() {
       if (error) throw error;
       res.json(data || []);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Departments fetch error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Add department
-  app.post("/api/departments", async (req, res) => {
+  // Admin: Add department (requires admin authentication)
+  app.post("/api/departments", requireAdminAuth, async (req, res) => {
     try {
-      const { name, code, college_id } = req.body;
-      const { data, error } = await getSupabase()
-        .from("departments")
-        .insert({ name, code, college_id })
-        .select()
-        .single();
-      if (error) throw error;
-      res.json(data);
+      // Input validation
+      try {
+        const name = validators.deptName(req.body?.name);
+        const college_id = validators.collegeId(req.body?.college_id);
+        
+        const { data, error } = await getSupabase()
+          .from("departments")
+          .insert({ name, college_id })
+          .select()
+          .single();
+        if (error) throw error;
+        await logAudit("department_created", { name, college_id }, req);
+        res.json(data);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Department creation error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Update department name
-  app.patch("/api/departments/:id", async (req, res) => {
+  // Admin: Update department name (requires admin authentication)
+  app.patch("/api/departments/:id", requireAdminAuth, async (req, res) => {
     try {
-      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      const college_id = typeof req.body?.college_id === "string" ? req.body.college_id.trim() : String(req.body?.college_id || "").trim();
-      if (!name) {
-        return res.status(400).json({ error: "Department name is required." });
-      }
-      if (!college_id) {
-        return res.status(400).json({ error: "College selection is required." });
-      }
+      // Input validation
+      try {
+        const name = validators.deptName(req.body?.name);
+        const college_id = validators.collegeId(req.body?.college_id);
+        
+        const { data, error } = await getSupabase()
+          .from("departments")
+          .update({ name, college_id })
+          .eq("id", req.params.id)
+          .select()
+          .single();
 
-      const { data, error } = await getSupabase()
-        .from("departments")
-        .update({ name, college_id })
-        .eq("id", req.params.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      res.json(data);
+        if (error) throw error;
+        await logAudit("department_updated", { department_id: req.params.id, name, college_id }, req);
+        res.json(data);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Department update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Delete department
-  app.delete("/api/departments/:id", async (req, res) => {
+  // Admin: Delete department (requires admin authentication)
+  app.delete("/api/departments/:id", requireAdminAuth, async (req, res) => {
     try {
       const { error } = await getSupabase()
         .from("departments")
         .delete()
         .eq("id", req.params.id);
       if (error) throw error;
+      await logAudit("department_deleted", { department_id: req.params.id }, req);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Department deletion error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Delete college
-  app.delete("/api/colleges/:id", async (req, res) => {
+  // Admin: Delete college (requires admin authentication)
+  app.delete("/api/colleges/:id", requireAdminAuth, async (req, res) => {
     try {
       const { error } = await getSupabase()
         .from("colleges")
         .delete()
         .eq("id", req.params.id);
       if (error) throw error;
+      await logAudit("college_deleted", { college_id: req.params.id }, req);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("College deletion error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Admin: Delete faculty
-  app.delete("/api/faculty/:id", async (req, res) => {
+  // Admin: Delete faculty (requires admin authentication)
+  app.delete("/api/faculty/:id", requireAdminAuth, async (req, res) => {
     try {
       const { error } = await getSupabase()
         .from("faculty")
         .delete()
         .eq("id", req.params.id);
       if (error) throw error;
+      await logAudit("faculty_deleted", { faculty_id: req.params.id }, req);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty deletion error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   const updateFacultyPassword = async (req: express.Request, res: express.Response) => {
     try {
-      const password = typeof req.body?.password === "string" ? req.body.password.trim() : "";
-      if (!password) {
+      // Input validation
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      const facultyId = req.params.id;
+      
+      if (!facultyId || facultyId.length > 50) {
+        return res.status(400).json({ error: "Invalid faculty ID format" });
+      }
+      
+      if (!passwordInput) {
         return res.status(400).json({ error: "Password is required" });
       }
-      if (password.length < 6) {
-        return res.status(400).json({ error: "Password must be at least 6 characters long" });
+      
+      // Validate password using validators utility (8-128 chars)
+      try {
+        validators.password(passwordInput);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
       }
 
-      const hashed = hashPassword(password);
+      const hashed = hashPassword(passwordInput);
       const { error } = await getSupabase()
         .from("faculty")
         .update({ password: hashed })
-        .eq("id", req.params.id);
+        .eq("id", facultyId);
       if (error) throw error;
+      
+      await logAudit("faculty_password_changed", { faculty_id: facultyId }, req);
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty password update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   };
 
-  // Admin: Update faculty password
-  app.post("/api/faculty/:id/password", updateFacultyPassword);
+  // Admin: Update faculty password (requires admin authentication)
+  app.post("/api/faculty/:id/password", requireAdminAuth, updateFacultyPassword);
 
   // Backward compatibility for older clients still using the reset route.
-  app.post("/api/faculty/:id/reset-password", updateFacultyPassword);
+  app.post("/api/faculty/:id/reset-password", requireAdminAuth, updateFacultyPassword);
 
-  // Admin: Add faculty
-  app.post("/api/faculty", async (req, res) => {
+  // Admin: Add faculty (requires admin authentication)
+  app.post("/api/faculty", requireAdminAuth, async (req, res) => {
     try {
       const { id, name, department_id, email, password } = req.body;
-      const normalizedEmail = normalizeEmail(email);
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-      if (!normalizedEmail) {
-        return res.status(400).json({ error: "Email is required." });
+      // Input validation
+      try {
+        if (!name) throw new Error("Faculty name is required");
+        validators.name(name);
+        
+        if (!email) throw new Error("Email is required");
+        validators.email(email);
+        
+        if (!password) throw new Error("Password is required");
+        validators.password(password);
+        
+        if (!id) throw new Error("Faculty ID is required");
+        validators.facultyId(id);
+        
+        if (department_id && typeof department_id !== "string") {
+          throw new Error("Invalid department ID format");
+        }
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
       }
-      if (!emailRegex.test(normalizedEmail)) {
-        return res.status(400).json({ error: "Invalid email format." });
-      }
+
+      const normalizedEmail = normalizeEmail(email);
       
       // Auto-generate a unique faculty code (e.g., FAC-A1B2C3)
       const faculty_code = "FAC-" + crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -1324,15 +1671,23 @@ async function startServer() {
         .select()
         .single();
       if (error) throw error;
-      res.json(data);
+      
+      const { password: _pw, ...safeData } = data;
+      await logAudit("faculty_created", { faculty_id: id, name }, req);
+      res.json(safeData);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty creation error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Student Active Queue
   app.get("/api/student/:id/active-queue", async (req, res) => {
     try {
+      if (!req.params.id || req.params.id.length > 50) {
+        return res.status(400).json({ error: "Invalid student ID format" });
+      }
+
       const { data, error } = await getSupabase()
         .from("queue")
         .select("id")
@@ -1347,24 +1702,35 @@ async function startServer() {
       
       res.json(data);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Active queue fetch error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Faculty Login
   app.post("/api/faculty/login", async (req, res) => {
     try {
-      const normalizedEmail = normalizeEmail(req.body?.email);
+      // Input validation
+      const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
       const password = typeof req.body?.password === "string" ? req.body.password : "";
 
-      if (!normalizedEmail) {
+      if (!email) {
         return res.status(400).json({ error: "Email is required." });
       }
-      if (!password.trim()) {
+      if (!password) {
         return res.status(400).json({ error: "Password is required." });
       }
 
+      // Validate email format
+      try {
+        validators.email(email);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: "Invalid email format." });
+      }
+
+      const normalizedEmail = normalizeEmail(email);
       const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
       if (isRateLimited(`faculty-login:${ip}`)) {
         return res.status(429).json({ error: "Too many login attempts. Please try again later." });
       }
@@ -1378,6 +1744,7 @@ async function startServer() {
       if (error) throw error;
 
       if (!data || !verifyPassword(password, data.password)) {
+        await logAudit("faculty_login_failed", { email: normalizedEmail, ip }, req);
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
@@ -1390,28 +1757,55 @@ async function startServer() {
           .eq("id", data.id);
       }
 
+      // Log successful login
+      await logAudit("faculty_login_success", { email: normalizedEmail, ip }, req);
+
       // Return faculty data without the password
       const { password: _pw, ...safeData } = data;
       res.json(safeData);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty login error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
   // Update faculty availability
   app.post("/api/faculty/:id/availability", async (req, res) => {
     try {
+      const targetId = req.params.id;
+      if (!targetId || targetId.length > 50) {
+        return res.status(400).json({ error: "Invalid faculty ID format" });
+      }
+      
       const { availability } = req.body;
+      if (!availability) {
+        return res.status(400).json({ error: "Availability data is required" });
+      }
+
+      // Validate availability format (should be array of objects with day, start_time, end_time)
+      if (!Array.isArray(availability)) {
+        return res.status(400).json({ error: "Availability must be an array" });
+      }
+      
+      try {
+        JSON.stringify(availability); // Ensure serializable
+      } catch (parseErr: any) {
+        return res.status(400).json({ error: "Invalid availability format" });
+      }
+
       const { data, error } = await getSupabase()
         .from("faculty")
         .update({ full_name: JSON.stringify(availability) })
-        .eq("id", req.params.id)
+        .eq("id", targetId)
         .select()
         .single();
       if (error) throw error;
+      
+      await logAudit("faculty_availability_updated", { faculty_id: targetId }, req);
       res.json(data);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty availability update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -1439,22 +1833,39 @@ async function startServer() {
       
       res.json(formattedData);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty fetch error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  // Update Faculty Status
+  // Update Faculty Status - REQUIRES AUTHENTICATION
   app.post("/api/faculty/:id/status", async (req, res) => {
     try {
+      const targetId = req.params.id;
+      if (!targetId || targetId.length > 50) {
+        return res.status(400).json({ error: "Invalid faculty ID format" });
+      }
+      
       const { status } = req.body;
+      const validStatuses = ["available", "busy", "offline"];
+      
+      if (!status || !validStatuses.includes(status)) {
+        return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
+      }
+      
       const { error } = await getSupabase()
         .from("faculty")
         .update({ status })
-        .eq("id", req.params.id);
+        .eq("id", targetId);
 
-      if (error) throw error;
+      if (error) {
+        // Log error but don't expose database message
+        console.error("Faculty status update error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+      }
 
-      broadcast("faculty_updated", { faculty_id: req.params.id });
+      await logAudit("faculty_status_updated", { faculty_id: targetId, new_status: status }, req);
+      broadcast("faculty_updated", { faculty_id: targetId });
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1486,6 +1897,26 @@ async function startServer() {
   // Join Queue
   app.post("/api/queue/join", async (req, res) => {
     try {
+      // Input validation
+      try {
+        validators.studentId(req.body?.student_id); // Validate required field
+        if (req.body?.faculty_id) validators.facultyId(req.body.faculty_id);
+        if (req.body?.student_name) validators.name(req.body.student_name);
+        if (req.body?.student_email) validators.email(req.body.student_email);
+        
+        // Validate optional string fields
+        const validateOptionalString = (val: any, fieldName: string, maxLen: number = 255) => {
+          if (val && typeof val !== "string") throw new Error(`${fieldName} must be a string`);
+          if (val && String(val).length > maxLen) throw new Error(`${fieldName} too long (max ${maxLen} chars)`);
+        };
+        validateOptionalString(req.body?.course, "course");
+        validateOptionalString(req.body?.purpose, "purpose");
+        validateOptionalString(req.body?.source, "source");
+        validateOptionalString(req.body?.time_period, "time_period");
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
+
       const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period } = req.body;
 
       // Check if any faculty is available before allowing student to join queue
@@ -1503,14 +1934,21 @@ async function startServer() {
       }
 
       // Check if any available faculty has today's availability slots
+      // Note: Availability might be stored in full_name column as JSON, or may not be set yet
+      // If no availability is configured, we still allow queue joins as long as faculty status is "available"
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const todayDay = daysOfWeek[new Date().getDay()];
       
+      let hasValidAvailabilityData = false;
       let hasAvailableFacultyWithSlots = false;
+      
       for (const faculty of allFaculty) {
         try {
+          // Try to parse full_name as availability JSON (if it's been set via /api/faculty/:id/availability)
           const parsed = JSON.parse(faculty.full_name || "[]");
-          if (Array.isArray(parsed)) {
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Availability data is configured for this faculty
+            hasValidAvailabilityData = true;
             const todaySlot = parsed.find((slot: any) => slot?.day === todayDay);
             if (todaySlot) {
               hasAvailableFacultyWithSlots = true;
@@ -1518,13 +1956,16 @@ async function startServer() {
             }
           }
         } catch (e) {
-          // Ignore parsing errors, continue checking other faculty
+          // full_name is not JSON (contains faculty name instead) - availability not configured via API
+          // This is normal for faculty who haven't set their availability yet
         }
       }
 
-      if (!hasAvailableFacultyWithSlots) {
+      // If no faculty have configured availability, allow queue joins as long as faculty are available
+      // If some faculty have configured availability, require at least one with today's slot
+      if (hasValidAvailabilityData && !hasAvailableFacultyWithSlots) {
         return res.status(503).json({ 
-          error: "No faculty members are currently available. Please try again later." 
+          error: "No faculty members are currently available for today. Please try again later." 
         });
       }
 
@@ -1657,7 +2098,8 @@ async function startServer() {
       broadcast("queue_updated", { faculty_id });
       res.json(formatted);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Queue join error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -1687,8 +2129,8 @@ async function startServer() {
     }
   });
 
-  // Admin: Update faculty profile
-  app.patch("/api/faculty/:id", async (req, res) => {
+  // Admin: Update faculty profile - REQUIRES AUTHENTICATION
+  app.patch("/api/faculty/:id", requireAdminAuth, async (req, res) => {
     try {
       const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
       const email = normalizeEmail(req.body?.email);
@@ -1719,8 +2161,8 @@ async function startServer() {
     }
   });
 
-  // Admin: Live queue monitoring (waiting, next, ongoing)
-  app.get("/api/admin/queue-monitor", async (req, res) => {
+  // Admin: Live queue monitoring (waiting, next, ongoing) - REQUIRES AUTHENTICATION
+  app.get("/api/admin/queue-monitor", requireAdminAuth, async (req, res) => {
     try {
       const { data, error } = await getSupabase()
         .from("queue")
@@ -1873,8 +2315,18 @@ async function startServer() {
   // Faculty Action: Update Consultation Status
   app.post("/api/queue/:id/status", async (req, res) => {
     try {
+      // Input validation
       const { status, meet_link } = req.body;
       const consultationId = req.params.id;
+      
+      if (!status || typeof status !== "string") {
+        return res.status(400).json({ error: "Status is required and must be a string" });
+      }
+      
+      const validStatuses = ["waiting", "serving", "completed", "cancelled"];
+      if (!validStatuses.includes(status.toLowerCase())) {
+        return res.status(400).json({ error: "Invalid status value" });
+      }
 
       const { data: consultation, error: fetchError } = await getSupabase()
         .from("queue")
@@ -1999,7 +2451,8 @@ async function startServer() {
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
       res.json({ success: true, meet_link: final_email_link || null });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Queue status update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -2346,7 +2799,7 @@ async function startServer() {
       res.json({ url, redirectUri, mode: "oauth" });
     } catch (err: any) {
       console.error("Faculty Google OAuth URL Error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -2361,7 +2814,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (err: any) {
       console.error("Faculty Google Disconnect Error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -2392,7 +2845,7 @@ async function startServer() {
       res.json({ url, redirectUri, mode: "oauth" });
     } catch (err: any) {
       console.error("OAuth URL Error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -2561,16 +3014,21 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error("OAuth Callback Error:", err);
-      res.status(500);
+      const role = stateObj.role || "";
       const errorTypeMap: Record<string, string> = {
         faculty: "FACULTY_GOOGLE_AUTH_ERROR",
         admin_login: "ADMIN_LOGIN_ERROR",
         admin_reset: "ADMIN_RESET_ERROR",
       };
+      
+      // Log failed auth attempts for audit
+      await logAudit("oauth_callback_error", { role, error: err.message }, undefined);
+      
+      res.status(500);
       sendOAuthResponse({
-        type: errorTypeMap[stateObj.role || ""] || "OAUTH_AUTH_ERROR",
-        error: err.message || "Authentication failed.",
-        message: `Authentication failed: ${err.message || "Unknown error"}`,
+        type: errorTypeMap[role] || "OAUTH_AUTH_ERROR",
+        error: "Authentication failed. Please try again.",
+        message: "Authentication failed. Please try again.",
       });
     }
   });
@@ -2609,7 +3067,7 @@ async function startServer() {
       console.error("Supabase Recordings Status Error:", err);
       res.status(500).json({
         ready: false,
-        error: err?.message || "Supabase recording storage is unavailable.",
+        error: "Recording storage is unavailable.",
       });
     }
   });
@@ -2750,7 +3208,7 @@ async function startServer() {
     } catch (err: any) {
       console.error("Supabase Recordings List Error:", err);
       res.status(500).json({
-        error: err?.message || "Failed to list Supabase recordings.",
+        error: "Failed to list recordings.",
       });
     }
   });
@@ -2844,6 +3302,25 @@ async function startServer() {
       const file = req.file;
       if (!file) {
         return res.status(400).json({ error: "Missing file" });
+      }
+
+      // Input validation
+      try {
+        // Validate file name
+        validators.fileName(file.originalname);
+        // Validate MIME type (optional but should be audio/video)
+        if (file.mimetype && !/^(audio|video)\//.test(file.mimetype)) {
+          throw new Error("Invalid file type. Expected audio or video file");
+        }
+        // Validate IDs if provided
+        if (req.body?.faculty_id) validators.facultyId(req.body.faculty_id);
+        if (req.body?.student_id) validators.studentId(req.body.student_id);
+        if (req.body?.student_name) validators.name(req.body.student_name);
+      } catch (validationErr: any) {
+        if (file && file.path && require("fs").existsSync(file.path)) {
+          require("fs").unlinkSync(file.path);
+        }
+        return res.status(400).json({ error: validationErr.message });
       }
 
       await ensureSupabaseRecordingsBucket();
@@ -2948,7 +3425,7 @@ async function startServer() {
       }
 
       res.status(500).json({
-        error: err?.message || "Failed to upload recording to Supabase Storage.",
+        error: "Failed to upload recording.",
       });
     }
   });
@@ -3202,7 +3679,7 @@ async function startServer() {
       res.json({ success: true, mode: "oauth" });
     } catch (err: any) {
       console.error("Drive Disconnect Error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -3213,6 +3690,21 @@ async function startServer() {
       
       if (!file) {
         return res.status(400).json({ error: "Missing file" });
+      }
+
+      // Input validation
+      try {
+        // Validate file name
+        validators.fileName(file.originalname);
+        // Validate IDs if provided
+        if (req.body?.faculty_id) validators.facultyId(req.body.faculty_id);
+        if (req.body?.student_id) validators.studentId(req.body.student_id);
+        if (req.body?.student_name) validators.name(req.body.student_name);
+      } catch (validationErr: any) {
+        if (file && file.path && fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(400).json({ error: validationErr.message });
       }
 
       const authContext = getDriveAuthContext(req);

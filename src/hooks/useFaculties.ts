@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 
 export function useFaculties() {
   const [faculties, setFaculties] = useState<any[]>([]);

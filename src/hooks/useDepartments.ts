@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 
 export function useDepartments(colleges: any[]) {
   const [departments, setDepartments] = useState<any[]>([]);
