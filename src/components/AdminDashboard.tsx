@@ -65,19 +65,32 @@ export default function AdminDashboard() {
   const [editCollegeCodeInput, setEditCollegeCodeInput] = useState("");
   const [editCollegeSaving, setEditCollegeSaving] = useState(false);
   const [editCollegeError, setEditCollegeError] = useState("");
+  const [deleteCollegePassword, setDeleteCollegePassword] = useState("");
+  const [deleteCollegePasswordError, setDeleteCollegePasswordError] = useState("");
   const [deleteDepartmentModal, setDeleteDepartmentModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
+  const [deleteDepartmentPassword, setDeleteDepartmentPassword] = useState("");
+  const [deleteDepartmentPasswordError, setDeleteDepartmentPasswordError] = useState("");
   const [deleteFacultyModal, setDeleteFacultyModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
+  const [deleteFacultyPassword, setDeleteFacultyPassword] = useState("");
+  const [deleteFacultyPasswordError, setDeleteFacultyPasswordError] = useState("");
   const [editDepartmentModal, setEditDepartmentModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
   const [editDepartmentNameInput, setEditDepartmentNameInput] = useState("");
   const [editDepartmentCollegeIdInput, setEditDepartmentCollegeIdInput] = useState("");
   const [editDepartmentSaving, setEditDepartmentSaving] = useState(false);
   const [editDepartmentError, setEditDepartmentError] = useState("");
+  const [editCollegePasswordModal, setEditCollegePasswordModal] = useState(false);
+  const [editCollegePassword, setEditCollegePassword] = useState("");
+  const [editDepartmentPasswordModal, setEditDepartmentPasswordModal] = useState(false);
+  const [editDepartmentPassword, setEditDepartmentPassword] = useState("");
   const [editFacultyProfileModal, setEditFacultyProfileModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
   const [editFacultyNameInput, setEditFacultyNameInput] = useState("");
   const [editFacultyEmailInput, setEditFacultyEmailInput] = useState("");
+  const [editFacultyDepartmentInput, setEditFacultyDepartmentInput] = useState("");
+  const [editFacultyCollegeInput, setEditFacultyCollegeInput] = useState("");
   const [editFacultyProfileSaving, setEditFacultyProfileSaving] = useState(false);
   const [editFacultyProfileError, setEditFacultyProfileError] = useState("");
   const [editFacultyPasswordModal, setEditFacultyPasswordModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
+  const [editFacultyPasswordSource, setEditFacultyPasswordSource] = useState<"faculty" | "profile">("faculty");
   const [facultyPasswordInput, setFacultyPasswordInput] = useState("");
   const [facultyPasswordConfirm, setFacultyPasswordConfirm] = useState("");
   const [facultyPasswordSaving, setFacultyPasswordSaving] = useState(false);
@@ -233,7 +246,7 @@ export default function AdminDashboard() {
       const res = await fetch(`/api/recordings${query}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Failed to load Supabase recordings.");
+        throw new Error(data.error || "Failed to load consultation recordings.");
       }
 
       const files = Array.isArray(data.files) ? (data.files as DriveRecording[]) : [];
@@ -247,8 +260,8 @@ export default function AdminDashboard() {
         return mergedFiles[0]?.id || null;
       });
     } catch (err) {
-      console.error("Failed to fetch Supabase recordings", err);
-      setDriveRecordingsError(err instanceof Error ? err.message : "Failed to load Supabase recordings.");
+      console.error("Failed to fetch consultation recordings", err);
+      setDriveRecordingsError(err instanceof Error ? err.message : "Failed to load consultation recordings.");
     } finally {
       setDriveRecordingsLoading(false);
     }
@@ -257,7 +270,7 @@ export default function AdminDashboard() {
   const fetchLiveQueue = async (retries = 2, silent = false) => {
     if (!silent) setLiveQueueLoading(true);
     try {
-      const res = await fetch("/api/admin/queue-monitor");
+      const res = await fetch("/api/admin/queue-monitor", { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const contentType = res.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
@@ -383,7 +396,7 @@ export default function AdminDashboard() {
     if (!confirm("Are you sure you want to disconnect Google? Meet links will not auto-generate until you reconnect. Recordings will continue saving to Supabase Storage.")) return;
     
     try {
-      const res = await fetch("/api/drive/disconnect", { method: "POST" });
+      const res = await fetch("/api/drive/disconnect", { method: "POST", credentials: "include" });
       if (!res.ok) throw new Error("Failed to disconnect");
       await checkDriveStatus();
       alert("Google OAuth disconnected successfully.");
@@ -462,6 +475,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/colleges", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ name: collegeName.trim(), code: collegeCode.trim() }),
       });
       const data = await res.json();
@@ -500,6 +514,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/departments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ name: deptName.trim(), code: deptCode.trim(), college_id: collegeId }),
       });
       const data = await res.json();
@@ -558,6 +573,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/faculty", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           id,
           name: facName.trim(),
@@ -583,19 +599,41 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("user_role");
-    navigate("/admin/login");
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/admin/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout API error:", err);
+    } finally {
+      localStorage.removeItem("user_role");
+      navigate("/admin/login");
+    }
   };
 
   const handleDeleteCollege = async () => {
+    if (!deleteCollegePassword.trim()) {
+      setDeleteCollegePasswordError("Password is required to confirm deletion");
+      return;
+    }
     try {
-      const res = await fetch(`/api/colleges/${deleteCollegeModal.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete college");
+      const res = await fetch(`/api/colleges/${deleteCollegeModal.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password: deleteCollegePassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to delete college");
       fetchColleges();
       setDeleteCollegeModal({ isOpen: false, id: "", name: "" });
+      setDeleteCollegePassword("");
+      setDeleteCollegePasswordError("");
+      alert("College deleted successfully");
     } catch (err: any) {
-      alert(err.message);
+      setDeleteCollegePasswordError(err.message);
     }
   };
 
@@ -625,18 +663,34 @@ export default function AdminDashboard() {
       return;
     }
 
+    // Prompt for password first
+    setEditCollegePasswordModal(true);
+  };
+
+  const confirmSaveCollege = async () => {
+    if (!editCollegePassword.trim()) {
+      alert("Password is required");
+      return;
+    }
+
+    const name = editCollegeNameInput.trim();
+    const code = editCollegeCodeInput.trim();
+
     setEditCollegeSaving(true);
     setEditCollegeError("");
     try {
       const res = await fetch(`/api/colleges/${editCollegeModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, code }),
+        credentials: "include",
+        body: JSON.stringify({ name, code, password: editCollegePassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to update college name");
 
       closeEditCollegeModal();
+      setEditCollegePasswordModal(false);
+      setEditCollegePassword("");
       fetchColleges();
       alert("College updated successfully.");
     } catch (err: any) {
@@ -672,18 +726,34 @@ export default function AdminDashboard() {
       return;
     }
 
+    // Prompt for password first
+    setEditDepartmentPasswordModal(true);
+  };
+
+  const confirmSaveDepartment = async () => {
+    if (!editDepartmentPassword.trim()) {
+      alert("Password is required");
+      return;
+    }
+
+    const name = editDepartmentNameInput.trim();
+    const college_id = editDepartmentCollegeIdInput;
+
     setEditDepartmentSaving(true);
     setEditDepartmentError("");
     try {
       const res = await fetch(`/api/departments/${editDepartmentModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, college_id }),
+        credentials: "include",
+        body: JSON.stringify({ name, college_id, password: editDepartmentPassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to update department name");
 
       closeEditDepartmentModal();
+      setEditDepartmentPasswordModal(false);
+      setEditDepartmentPassword("");
       fetchDepartments();
       fetchFaculties();
       alert("Department updated successfully.");
@@ -695,23 +765,36 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteDepartment = async () => {
+    if (!deleteDepartmentPassword.trim()) {
+      setDeleteDepartmentPasswordError("Password is required to confirm deletion");
+      return;
+    }
     try {
-      const res = await fetch(`/api/departments/${deleteDepartmentModal.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/departments/${deleteDepartmentModal.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password: deleteDepartmentPassword })
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to delete department");
       fetchDepartments();
       fetchFaculties();
       setDeleteDepartmentModal({ isOpen: false, id: "", name: "" });
+      setDeleteDepartmentPassword("");
+      setDeleteDepartmentPasswordError("");
       alert("Department deleted successfully.");
     } catch (err: any) {
-      alert(err.message);
+      setDeleteDepartmentPasswordError(err.message);
     }
   };
 
-  const openEditFacultyProfileModal = (id: string, name: string, email: string) => {
+  const openEditFacultyProfileModal = (id: string, name: string, email: string, department_id?: string, college_id?: string) => {
     setEditFacultyProfileModal({ isOpen: true, id, name });
     setEditFacultyNameInput(name || "");
     setEditFacultyEmailInput(email || "");
+    setEditFacultyDepartmentInput(department_id || "");
+    setEditFacultyCollegeInput(college_id || "");
     setEditFacultyProfileError("");
   };
 
@@ -719,12 +802,16 @@ export default function AdminDashboard() {
     setEditFacultyProfileModal({ isOpen: false, id: "", name: "" });
     setEditFacultyNameInput("");
     setEditFacultyEmailInput("");
+    setEditFacultyDepartmentInput("");
+    setEditFacultyCollegeInput("");
     setEditFacultyProfileError("");
   };
 
   const handleSaveFacultyProfile = async () => {
     const name = editFacultyNameInput.trim();
     const email = editFacultyEmailInput.trim();
+    const department_id = editFacultyDepartmentInput.trim();
+    const college_id = editFacultyCollegeInput.trim();
 
     if (!name) {
       setEditFacultyProfileError("Faculty name is required.");
@@ -740,38 +827,74 @@ export default function AdminDashboard() {
       return;
     }
 
+    // Close the edit modal and open password confirmation modal
+    setEditFacultyPasswordSource("profile");
+    setEditFacultyPasswordModal({ isOpen: true, id: editFacultyProfileModal.id, name: editFacultyProfileModal.name });
+  };
+
+  const confirmSaveFacultyProfile = async () => {
+    if (editFacultyPasswordSource !== "profile") return;
+    if (!facultyPasswordInput.trim()) {
+      setFacultyPasswordError("Password is required");
+      return;
+    }
+
+    const name = editFacultyNameInput.trim();
+    const email = editFacultyEmailInput.trim();
+    const department_id = editFacultyDepartmentInput.trim();
+    const college_id = editFacultyCollegeInput.trim();
+
     setEditFacultyProfileSaving(true);
-    setEditFacultyProfileError("");
+    setFacultyPasswordError("");
     try {
-      const res = await fetch(`/api/faculty/${editFacultyProfileModal.id}`, {
+      const res = await fetch(`/api/faculty/${editFacultyPasswordModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email }),
+        credentials: "include",
+        body: JSON.stringify({ name, email, department_id, college_id, password: facultyPasswordInput }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to update faculty profile");
       closeEditFacultyProfileModal();
+      closeEditFacultyPasswordModal();
+      setFacultyPasswordInput("");
+      setFacultyPasswordConfirm("");
+      setFacultyPasswordError("");
       fetchFaculties();
       alert("Faculty profile updated successfully.");
     } catch (err: any) {
-      setEditFacultyProfileError(err.message || "Failed to update faculty profile");
+      setFacultyPasswordError(err.message || "Failed to update faculty profile");
     } finally {
       setEditFacultyProfileSaving(false);
     }
   };
 
   const handleDeleteFaculty = async () => {
+    if (!deleteFacultyPassword.trim()) {
+      setDeleteFacultyPasswordError("Password is required to confirm deletion");
+      return;
+    }
     try {
-      const res = await fetch(`/api/faculty/${deleteFacultyModal.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete faculty");
+      const res = await fetch(`/api/faculty/${deleteFacultyModal.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password: deleteFacultyPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to delete faculty");
       fetchFaculties();
       setDeleteFacultyModal({ isOpen: false, id: "", name: "" });
+      setDeleteFacultyPassword("");
+      setDeleteFacultyPasswordError("");
+      alert("Faculty deleted successfully");
     } catch (err: any) {
-      alert(err.message);
+      setDeleteFacultyPasswordError(err.message);
     }
   };
 
   const openEditFacultyPasswordModal = (id: string, name: string) => {
+    setEditFacultyPasswordSource("faculty");
     setEditFacultyPasswordModal({ isOpen: true, id, name });
     setFacultyPasswordInput("");
     setFacultyPasswordConfirm("");
@@ -780,12 +903,14 @@ export default function AdminDashboard() {
 
   const closeEditFacultyPasswordModal = () => {
     setEditFacultyPasswordModal({ isOpen: false, id: "", name: "" });
+    setEditFacultyPasswordSource("faculty");
     setFacultyPasswordInput("");
     setFacultyPasswordConfirm("");
     setFacultyPasswordError("");
   };
 
   const handleSaveFacultyPassword = async () => {
+    if (editFacultyPasswordSource !== "faculty") return;
     if (!facultyPasswordInput.trim()) {
       setFacultyPasswordError("Password is required.");
       return;
@@ -805,6 +930,7 @@ export default function AdminDashboard() {
       const res = await fetch(`/api/faculty/${editFacultyPasswordModal.id}/password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ password: facultyPasswordInput }),
       });
       const data = await res.json().catch(() => ({}));
@@ -855,6 +981,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/admin/password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ password: adminPasswordInput }),
       });
       const data = await res.json().catch(() => ({}));
@@ -896,6 +1023,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/admin/email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1194,8 +1322,8 @@ export default function AdminDashboard() {
                 <FolderOpen className="w-6 h-6 text-amber-600" />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-neutral-900">Supabase Recordings</h2>
-                <p className="text-sm text-neutral-500">Browse consultation audio stored in Supabase Storage, including the faculty and student tied to each recording.</p>
+                <h2 className="text-2xl font-bold text-neutral-900">Consultation Recordings</h2>
+                <p className="text-sm text-neutral-500">Browse consultation audio recordings, including the faculty and student tied to each recording.</p>
               </div>
             </div>
             <button
@@ -1216,7 +1344,7 @@ export default function AdminDashboard() {
 
           {!recordingStorageReady ? (
             <div className="p-6 rounded-2xl bg-neutral-50 text-neutral-500 text-sm border border-neutral-200">
-              Supabase recording storage is unavailable right now. Recordings will appear here once storage is reachable again.
+              Consultation recording storage is unavailable right now. Recordings will appear here once storage is reachable again.
             </div>
           ) : (
             <>
@@ -1244,7 +1372,7 @@ export default function AdminDashboard() {
 
               {driveRecordingsLoading && driveRecordings.length === 0 ? (
                 <div className="p-6 rounded-2xl bg-neutral-50 text-neutral-500 text-sm border border-neutral-200">
-                  Loading Supabase recordings...
+                  Loading consultation recordings...
                 </div>
               ) : filteredDriveRecordings.length === 0 ? (
                 <div className="p-6 rounded-2xl bg-neutral-50 text-neutral-500 text-sm border border-neutral-200">
@@ -1806,7 +1934,7 @@ export default function AdminDashboard() {
                                     <td className="py-4 px-4 text-right">
                                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <button
-                                          onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email)}
+                                          onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email, fac.department_id, fac.college_id)}
                                           className="px-2 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
                                           title="Edit Faculty Profile"
                                         >
@@ -1886,7 +2014,7 @@ export default function AdminDashboard() {
                           <td className="py-4 px-4 text-right">
                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
-                                onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email)}
+                                onClick={() => openEditFacultyProfileModal(fac.id, fac.name, fac.email, fac.department_id, fac.college_id)}
                                 className="px-2 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
                                 title="Edit Faculty Profile"
                               >
@@ -1923,32 +2051,41 @@ export default function AdminDashboard() {
       {editCollegeModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h2 className="text-2xl font-bold text-neutral-900 mb-2">Edit College</h2>
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <Building className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Edit College</h2>
+            </div>
             <p className="text-neutral-600 mb-6">
               Update the details for <span className="font-bold text-neutral-900">{editCollegeModal.name}</span>.
             </p>
-            <div className="space-y-4 mb-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">College Name</label>
-                <input
-                  type="text"
-                  value={editCollegeNameInput}
-                  onChange={(e) => setEditCollegeNameInput(e.target.value)}
-                  placeholder="Enter college name"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">College Code</label>
-                <input
-                  type="text"
-                  value={editCollegeCodeInput}
-                  onChange={(e) => setEditCollegeCodeInput(e.target.value)}
-                  placeholder="Enter college code"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              {editCollegeError && <p className="text-sm text-red-600">{editCollegeError}</p>}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">College Name</label>
+              <input
+                type="text"
+                value={editCollegeNameInput}
+                onChange={(e) => {
+                  setEditCollegeNameInput(e.target.value);
+                  setEditCollegeError("");
+                }}
+                placeholder="Enter college name"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">College Code</label>
+              <input
+                type="text"
+                value={editCollegeCodeInput}
+                onChange={(e) => {
+                  setEditCollegeCodeInput(e.target.value);
+                  setEditCollegeError("");
+                }}
+                placeholder="Enter college code"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+              {editCollegeError && <p className="text-sm text-red-600 mt-2">{editCollegeError}</p>}
             </div>
             <div className="flex gap-4">
               <button
@@ -1970,40 +2107,98 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* Edit College Password Confirmation */}
+      {editCollegePasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <KeyRound className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Edit College</h2>
+            </div>
+            <p className="text-neutral-600 mb-6">Enter your admin password to confirm changes.</p>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Admin Password</label>
+              <input
+                type="password"
+                value={editCollegePassword}
+                onChange={(e) => {
+                  setEditCollegePassword(e.target.value);
+                  setEditCollegeError("");
+                }}
+                placeholder="Enter admin password"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+              {editCollegeError && <p className="text-sm text-red-600 mt-2">{editCollegeError}</p>}
+            </div>
+            <div className="flex gap-4">
+              <button
+                onClick={() => {
+                  setEditCollegePasswordModal(false);
+                  setEditCollegePassword("");
+                  setEditCollegeError("");
+                }}
+                disabled={editCollegeSaving}
+                className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmSaveCollege}
+                disabled={editCollegeSaving}
+                className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl transition-colors"
+              >
+                {editCollegeSaving ? "Saving..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editDepartmentModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h2 className="text-2xl font-bold text-neutral-900 mb-2">Edit Department</h2>
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <FolderOpen className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Edit Department</h2>
+            </div>
             <p className="text-neutral-600 mb-6">
               Update the details for <span className="font-bold text-neutral-900">{editDepartmentModal.name}</span>.
             </p>
-            <div className="space-y-4 mb-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">Department Name</label>
-                <input
-                  type="text"
-                  value={editDepartmentNameInput}
-                  onChange={(e) => setEditDepartmentNameInput(e.target.value)}
-                  placeholder="Enter department name"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">College</label>
-                <select
-                  value={editDepartmentCollegeIdInput}
-                  onChange={(e) => setEditDepartmentCollegeIdInput(e.target.value)}
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                >
-                  <option value="" disabled>Select College</option>
-                  {colleges.map((c: any) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {editDepartmentError && <p className="text-sm text-red-600">{editDepartmentError}</p>}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Department Name</label>
+              <input
+                type="text"
+                value={editDepartmentNameInput}
+                onChange={(e) => {
+                  setEditDepartmentNameInput(e.target.value);
+                  setEditDepartmentError("");
+                }}
+                placeholder="Enter department name"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">College</label>
+              <select
+                value={editDepartmentCollegeIdInput}
+                onChange={(e) => {
+                  setEditDepartmentCollegeIdInput(e.target.value);
+                  setEditDepartmentError("");
+                }}
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              >
+                <option value="" disabled>Select College</option>
+                {colleges.map((c: any) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              {editDepartmentError && <p className="text-sm text-red-600 mt-2">{editDepartmentError}</p>}
             </div>
             <div className="flex gap-4">
               <button
@@ -2025,6 +2220,55 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* Edit Department Password Confirmation */}
+      {editDepartmentPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <KeyRound className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Confirm Department Edit</h2>
+            </div>
+            <p className="text-neutral-600 mb-6">Enter your admin password to confirm changes.</p>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Admin Password</label>
+              <input
+                type="password"
+                value={editDepartmentPassword}
+                onChange={(e) => {
+                  setEditDepartmentPassword(e.target.value);
+                  setEditDepartmentError("");
+                }}
+                placeholder="Enter admin password"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+              {editDepartmentError && <p className="text-sm text-red-600 mt-2">{editDepartmentError}</p>}
+            </div>
+            <div className="flex gap-4">
+              <button
+                onClick={() => {
+                  setEditDepartmentPasswordModal(false);
+                  setEditDepartmentPassword("");
+                  setEditDepartmentError("");
+                }}
+                disabled={editDepartmentSaving}
+                className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmSaveDepartment}
+                disabled={editDepartmentSaving}
+                className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl transition-colors"
+              >
+                {editDepartmentSaving ? "Saving..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteCollegeModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
@@ -2034,12 +2278,32 @@ export default function AdminDashboard() {
               </div>
               <h2 className="text-2xl font-bold text-neutral-900">Delete College</h2>
             </div>
-            <p className="text-neutral-600 mb-8">
+            <p className="text-neutral-600 mb-6">
               Are you sure you want to delete <span className="font-bold text-neutral-900">{deleteCollegeModal.name}</span>? This action cannot be undone.
             </p>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Admin Password</label>
+              <input
+                type="password"
+                value={deleteCollegePassword}
+                onChange={(e) => {
+                  setDeleteCollegePassword(e.target.value);
+                  setDeleteCollegePasswordError("");
+                }}
+                placeholder="Enter your admin password"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-red-500 focus:ring-0 outline-none transition-colors"
+              />
+              {deleteCollegePasswordError && (
+                <p className="text-sm text-red-600 mt-2">{deleteCollegePasswordError}</p>
+              )}
+            </div>
             <div className="flex gap-4">
               <button
-                onClick={() => setDeleteCollegeModal({ isOpen: false, id: "", name: "" })}
+                onClick={() => {
+                  setDeleteCollegeModal({ isOpen: false, id: "", name: "" });
+                  setDeleteCollegePassword("");
+                  setDeleteCollegePasswordError("");
+                }}
                 className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
               >
                 Cancel
@@ -2064,12 +2328,32 @@ export default function AdminDashboard() {
               </div>
               <h2 className="text-2xl font-bold text-neutral-900">Delete Department</h2>
             </div>
-            <p className="text-neutral-600 mb-8">
+            <p className="text-neutral-600 mb-6">
               Are you sure you want to delete <span className="font-bold text-neutral-900">{deleteDepartmentModal.name}</span>? This action cannot be undone.
             </p>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Admin Password</label>
+              <input
+                type="password"
+                value={deleteDepartmentPassword}
+                onChange={(e) => {
+                  setDeleteDepartmentPassword(e.target.value);
+                  setDeleteDepartmentPasswordError("");
+                }}
+                placeholder="Enter your admin password"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-red-500 focus:ring-0 outline-none transition-colors"
+              />
+              {deleteDepartmentPasswordError && (
+                <p className="text-sm text-red-600 mt-2">{deleteDepartmentPasswordError}</p>
+              )}
+            </div>
             <div className="flex gap-4">
               <button
-                onClick={() => setDeleteDepartmentModal({ isOpen: false, id: "", name: "" })}
+                onClick={() => {
+                  setDeleteDepartmentModal({ isOpen: false, id: "", name: "" });
+                  setDeleteDepartmentPassword("");
+                  setDeleteDepartmentPasswordError("");
+                }}
                 className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
               >
                 Cancel
@@ -2094,12 +2378,32 @@ export default function AdminDashboard() {
               </div>
               <h2 className="text-2xl font-bold text-neutral-900">Delete Faculty</h2>
             </div>
-            <p className="text-neutral-600 mb-8">
+            <p className="text-neutral-600 mb-6">
               Are you sure you want to delete <span className="font-bold text-neutral-900">{deleteFacultyModal.name}</span>? This action cannot be undone.
             </p>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Admin Password</label>
+              <input
+                type="password"
+                value={deleteFacultyPassword}
+                onChange={(e) => {
+                  setDeleteFacultyPassword(e.target.value);
+                  setDeleteFacultyPasswordError("");
+                }}
+                placeholder="Enter your admin password"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-red-500 focus:ring-0 outline-none transition-colors"
+              />
+              {deleteFacultyPasswordError && (
+                <p className="text-sm text-red-600 mt-2">{deleteFacultyPasswordError}</p>
+              )}
+            </div>
             <div className="flex gap-4">
               <button
-                onClick={() => setDeleteFacultyModal({ isOpen: false, id: "", name: "" })}
+                onClick={() => {
+                  setDeleteFacultyModal({ isOpen: false, id: "", name: "" });
+                  setDeleteFacultyPassword("");
+                  setDeleteFacultyPasswordError("");
+                }}
                 className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
               >
                 Cancel
@@ -2117,34 +2421,86 @@ export default function AdminDashboard() {
 
       {editFacultyProfileModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h2 className="text-2xl font-bold text-neutral-900 mb-2">Edit Faculty Profile</h2>
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <Users className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Edit Faculty Profile</h2>
+            </div>
             <p className="text-neutral-600 mb-6">
               Update the profile for <span className="font-bold text-neutral-900">{editFacultyProfileModal.name}</span>.
             </p>
-            <div className="space-y-4 mb-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">Full Name</label>
-                <input
-                  type="text"
-                  value={editFacultyNameInput}
-                  onChange={(e) => setEditFacultyNameInput(e.target.value)}
-                  placeholder="Enter full name"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">Email Address</label>
-                <input
-                  type="email"
-                  value={editFacultyEmailInput}
-                  onChange={(e) => setEditFacultyEmailInput(e.target.value)}
-                  placeholder="Enter email address"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              {editFacultyProfileError && <p className="text-sm text-red-600">{editFacultyProfileError}</p>}
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Full Name</label>
+              <input
+                type="text"
+                value={editFacultyNameInput}
+                onChange={(e) => {
+                  setEditFacultyNameInput(e.target.value);
+                  setEditFacultyProfileError("");
+                }}
+                placeholder="Enter full name"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
             </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Email Address</label>
+              <input
+                type="email"
+                value={editFacultyEmailInput}
+                onChange={(e) => {
+                  setEditFacultyEmailInput(e.target.value);
+                  setEditFacultyProfileError("");
+                }}
+                placeholder="Enter email address"
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">College</label>
+              <select
+                value={editFacultyCollegeInput}
+                onChange={(e) => {
+                  setEditFacultyCollegeInput(e.target.value);
+                  setEditFacultyDepartmentInput(""); // Clear department when college changes
+                  setEditFacultyProfileError("");
+                }}
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              >
+                <option value="">Select a college</option>
+                {colleges.map((college) => (
+                  <option key={college.id} value={college.id}>
+                    {college.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">Department</label>
+              <select
+                value={editFacultyDepartmentInput}
+                onChange={(e) => {
+                  setEditFacultyDepartmentInput(e.target.value);
+                  setEditFacultyProfileError("");
+                }}
+                disabled={!editFacultyCollegeInput}
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl disabled:bg-neutral-100 disabled:text-neutral-400 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              >
+                <option value="">
+                  {editFacultyCollegeInput ? "Select a department" : "Select a college first"}
+                </option>
+                {editFacultyCollegeInput &&
+                  departments
+                    .filter((dept) => dept.college_id === editFacultyCollegeInput)
+                    .map((dept) => (
+                      <option key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </option>
+                    ))}
+              </select>
+            </div>
+            {editFacultyProfileError && <p className="text-sm text-red-600 mb-4">{editFacultyProfileError}</p>}
             <div className="flex gap-4">
               <button
                 onClick={closeEditFacultyProfileModal}
@@ -2172,48 +2528,63 @@ export default function AdminDashboard() {
               <div className="p-3 bg-indigo-100 rounded-full">
                 <KeyRound className="w-8 h-8" />
               </div>
-              <h2 className="text-2xl font-bold text-neutral-900">Edit Faculty Password</h2>
+              <h2 className="text-2xl font-bold text-neutral-900">
+                {editFacultyPasswordSource === "profile" ? "Edit Faculty" : "Set Faculty Password"}
+              </h2>
             </div>
             <p className="text-neutral-600 mb-6">
-              Set a new password for <span className="font-bold text-neutral-900">{editFacultyPasswordModal.name}</span>.
+              {editFacultyPasswordSource === "profile" 
+                ? `Enter your admin password to confirm editing ${editFacultyPasswordModal.name}.`
+                : `Set a new password for ${editFacultyPasswordModal.name}.`
+              }
             </p>
-            <div className="space-y-4 mb-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">New Password</label>
-                <input
-                  type="password"
-                  value={facultyPasswordInput}
-                  onChange={(e) => setFacultyPasswordInput(e.target.value)}
-                  placeholder="Enter new password"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-neutral-700 block">Confirm Password</label>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-neutral-700 mb-2">
+                {editFacultyPasswordSource === "profile" ? "Admin Password" : "New Password"}
+              </label>
+              <input
+                type="password"
+                value={facultyPasswordInput}
+                onChange={(e) => {
+                  setFacultyPasswordInput(e.target.value);
+                  setFacultyPasswordError("");
+                }}
+                placeholder={editFacultyPasswordSource === "profile" ? "Enter your admin password" : "Enter new password"}
+                className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+              />
+              {facultyPasswordError && (
+                <p className="text-sm text-red-600 mt-2">{facultyPasswordError}</p>
+              )}
+            </div>
+            {editFacultyPasswordSource === "faculty" && (
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-neutral-700 mb-2">Confirm Password</label>
                 <input
                   type="password"
                   value={facultyPasswordConfirm}
-                  onChange={(e) => setFacultyPasswordConfirm(e.target.value)}
+                  onChange={(e) => {
+                    setFacultyPasswordConfirm(e.target.value);
+                    setFacultyPasswordError("");
+                  }}
                   placeholder="Re-enter new password"
-                  className="w-full p-3 border-2 border-neutral-200 rounded-xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full px-4 py-2 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 />
               </div>
-              {facultyPasswordError && <p className="text-sm text-red-600">{facultyPasswordError}</p>}
-            </div>
+            )}
             <div className="flex gap-4">
               <button
                 onClick={closeEditFacultyPasswordModal}
-                disabled={facultyPasswordSaving}
+                disabled={facultyPasswordSaving || editFacultyProfileSaving}
                 className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSaveFacultyPassword}
-                disabled={facultyPasswordSaving}
+                onClick={editFacultyPasswordSource === "profile" ? confirmSaveFacultyProfile : handleSaveFacultyPassword}
+                disabled={facultyPasswordSaving || editFacultyProfileSaving}
                 className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl transition-colors"
               >
-                {facultyPasswordSaving ? "Saving..." : "Save Password"}
+                {(facultyPasswordSaving || editFacultyProfileSaving) ? "Processing..." : (editFacultyPasswordSource === "profile" ? "Confirm" : "Save Password")}
               </button>
             </div>
           </div>
@@ -2260,7 +2631,7 @@ export default function AdminDashboard() {
             <div className="mb-8 p-4 bg-neutral-50 rounded-2xl border border-neutral-200">
               <h3 className="text-sm font-bold text-neutral-700 uppercase tracking-wider mb-3">Google Account Connection</h3>
               <p className="text-xs text-neutral-500 mb-3">
-                Connect Google to enable auto-generated Meet links and Drive recording uploads.
+                Connect Google to enable auto-generated Meet links for faculty consultations.
               </p>
               {oauthConnected && !oauthExpired ? (
                 <div className="space-y-3">

@@ -84,7 +84,7 @@ export function useDriveIntegration() {
       const res = await fetch(`/api/recordings${query}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Failed to load Supabase recordings.");
+        throw new Error(data.error || "Failed to load consultation recordings.");
       }
 
       const files = Array.isArray(data.files) ? (data.files as DriveRecording[]) : [];
@@ -98,8 +98,8 @@ export function useDriveIntegration() {
         return mergedFiles[0]?.id || null;
       });
     } catch (err) {
-      console.error("Failed to fetch Supabase recordings", err);
-      setDriveRecordingsError(err instanceof Error ? err.message : "Failed to load Supabase recordings.");
+      console.error("Failed to fetch consultation recordings", err);
+      setDriveRecordingsError(err instanceof Error ? err.message : "Failed to load consultation recordings.");
     } finally {
       setDriveRecordingsLoading(false);
     }

@@ -197,7 +197,11 @@ function isValidAdminSession(token: string, ip: string): boolean {
     return false;
   }
   
-  if (session.ip !== ip) {
+  // For localhost/development, skip strict IP validation to allow requests from different interfaces
+  const isLocalhost = ip === "127.0.0.1" || ip === "::1" || ip === "localhost" ||
+                      session.ip === "127.0.0.1" || session.ip === "::1" || session.ip === "localhost";
+  
+  if (!isLocalhost && session.ip !== ip) {
     console.warn(`Session IP mismatch: ${session.ip} vs ${ip}`);
     adminSessions.delete(token);
     return false;
@@ -489,8 +493,9 @@ async function startServer() {
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:5173").split(",");
   app.use((req, res, next) => {
     const origin = req.get("origin");
-    if (!origin || allowedOrigins.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    // For credentials: "include" to work, we must specify the exact origin, not "*"
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -569,6 +574,12 @@ async function startServer() {
       if (!name || name.length < 2 || name.length > 255) throw new Error("Department name must be 2-255 characters");
       if (!/^[A-Za-z0-9\s\-&(),.']+$/.test(name)) throw new Error("Department name contains invalid characters");
       return name;
+    },
+    deptCode: (value: any): string => {
+      const code = String(value || "").trim().toUpperCase();
+      if (!code || code.length < 2 || code.length > 10) throw new Error("Department code must be 2-10 characters");
+      if (!/^[A-Z0-9\-]+$/.test(code)) throw new Error("Department code must be alphanumeric");
+      return code;
     },
     collegeId: (value: any): string => {
       const id = String(value || "").trim();
@@ -1390,7 +1401,7 @@ async function startServer() {
       res.cookie("admin_session", sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
+        sameSite: "lax",
         maxAge: ADMIN_SESSION_MAX_AGE_MS,
         path: "/"
       });
@@ -1495,6 +1506,33 @@ async function startServer() {
   // Add College (requires admin authentication)
   app.post("/api/colleges", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for college creation
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm college creation" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("college_creation_failed", { reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
       // Input validation
       try {
         const name = validators.collegeName(req.body?.name);
@@ -1532,6 +1570,33 @@ async function startServer() {
   // Admin: Update college name (requires admin authentication)
   app.patch("/api/colleges/:id", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for college update
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm college update" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("college_update_failed", { college_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
       // Input validation
       try {
         const name = validators.collegeName(req.body?.name);
@@ -1571,18 +1636,46 @@ async function startServer() {
   // Admin: Add department (requires admin authentication)
   app.post("/api/departments", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for department creation
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm department creation" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("department_creation_failed", { reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
       // Input validation
       try {
         const name = validators.deptName(req.body?.name);
         const college_id = validators.collegeId(req.body?.college_id);
+        const code = validators.deptCode(req.body?.code);
         
         const { data, error } = await getSupabase()
           .from("departments")
-          .insert({ name, college_id })
+          .insert({ name, college_id, code })
           .select()
           .single();
         if (error) throw error;
-        await logAudit("department_created", { name, college_id }, req);
+        await logAudit("department_created", { name, college_id, code }, req);
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1596,14 +1689,54 @@ async function startServer() {
   // Admin: Update department name (requires admin authentication)
   app.patch("/api/departments/:id", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for department update
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm department update" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("department_update_failed", { department_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
+      // Fetch current department to preserve code if not provided
+      const { data: currentDept, error: fetchError2 } = await getSupabase()
+        .from("departments")
+        .select("code")
+        .eq("id", req.params.id)
+        .maybeSingle();
+
+      if (fetchError2) throw fetchError2;
+      if (!currentDept) {
+        return res.status(404).json({ error: "Department not found" });
+      }
+
       // Input validation
       try {
         const name = validators.deptName(req.body?.name);
         const college_id = validators.collegeId(req.body?.college_id);
+        const code = req.body?.code || currentDept.code; // Preserve existing code if not provided
         
         const { data, error } = await getSupabase()
           .from("departments")
-          .update({ name, college_id })
+          .update({ name, college_id, code })
           .eq("id", req.params.id)
           .select()
           .single();
@@ -1620,9 +1753,37 @@ async function startServer() {
     }
   });
 
-  // Admin: Delete department (requires admin authentication)
+  // Admin: Delete department (requires admin authentication + password confirmation)
   app.delete("/api/departments/:id", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for department deletion
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm department deletion" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("department_deletion_failed", { department_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
+      // Proceed with deletion
       const { error } = await getSupabase()
         .from("departments")
         .delete()
@@ -1636,9 +1797,37 @@ async function startServer() {
     }
   });
 
-  // Admin: Delete college (requires admin authentication)
+  // Admin: Delete college (requires admin authentication + password confirmation)
   app.delete("/api/colleges/:id", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for college deletion
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm college deletion" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("college_deletion_failed", { college_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
+      // Proceed with deletion
       const { error } = await getSupabase()
         .from("colleges")
         .delete()
@@ -1652,9 +1841,37 @@ async function startServer() {
     }
   });
 
-  // Admin: Delete faculty (requires admin authentication)
+  // Admin: Delete faculty (requires admin authentication + password confirmation)
   app.delete("/api/faculty/:id", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for faculty deletion
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm faculty deletion" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("faculty_deletion_failed", { faculty_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
+      // Proceed with deletion
       const { error } = await getSupabase()
         .from("faculty")
         .delete()
@@ -1704,6 +1921,42 @@ async function startServer() {
     }
   };
 
+  // Faculty: Self-service password change (no admin auth required)
+  app.post("/api/faculty/:id/change-password", async (req, res) => {
+    try {
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      const facultyId = req.params.id;
+      
+      if (!facultyId || facultyId.length > 50) {
+        return res.status(400).json({ error: "Invalid faculty ID format" });
+      }
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required" });
+      }
+      
+      // Validate password using validators utility (8-128 chars)
+      try {
+        validators.password(passwordInput);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
+
+      const hashed = hashPassword(passwordInput);
+      const { error } = await getSupabase()
+        .from("faculty")
+        .update({ password: hashed })
+        .eq("id", facultyId);
+      if (error) throw error;
+      
+      await logAudit("faculty_self_password_changed", { faculty_id: facultyId }, req);
+      res.json({ success: true, message: "Password updated successfully" });
+    } catch (err: any) {
+      console.error("Faculty password update error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Admin: Update faculty password (requires admin authentication)
   app.post("/api/faculty/:id/password", requireAdminAuth, updateFacultyPassword);
 
@@ -1713,6 +1966,33 @@ async function startServer() {
   // Admin: Add faculty (requires admin authentication)
   app.post("/api/faculty", requireAdminAuth, async (req, res) => {
     try {
+      // Require password for faculty creation
+      const passwordInput = typeof req.body?.password_confirm === "string" ? req.body.password_confirm : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm faculty creation" });
+      }
+
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
+      }
+
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("faculty_creation_failed", { reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
       const { id, name, department_id, email, password } = req.body;
 
       // Input validation
@@ -2228,57 +2508,145 @@ async function startServer() {
   // Admin: Update faculty profile - REQUIRES AUTHENTICATION
   app.patch("/api/faculty/:id", requireAdminAuth, async (req, res) => {
     try {
-      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      const email = normalizeEmail(req.body?.email);
-
-      if (!name) {
-        return res.status(400).json({ error: "Faculty name is required." });
-      }
-      if (!email) {
-        return res.status(400).json({ error: "Email is required." });
+      // Require password for faculty profile update
+      const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
+      
+      if (!passwordInput) {
+        return res.status(400).json({ error: "Password is required to confirm faculty update" });
       }
 
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return res.status(400).json({ error: "Invalid email format." });
-      }
-
-      // First, fetch the current faculty data to preserve availability if it exists
-      const { data: currentFaculty, error: fetchError } = await getSupabase()
-        .from("faculty")
-        .select("full_name")
-        .eq("id", req.params.id)
+      // Fetch stored admin password
+      const { data: storedData, error: fetchError } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_password")
         .maybeSingle();
 
       if (fetchError) throw fetchError;
 
-      // Check if full_name contains JSON availability data
-      let fullNameToSave = name;
-      if (currentFaculty?.full_name) {
-        try {
-          const parsed = JSON.parse(currentFaculty.full_name);
-          // If it's an array (availability data), preserve it
-          if (Array.isArray(parsed)) {
-            fullNameToSave = JSON.stringify(parsed);
-          }
-        } catch (e) {
-          // If it's not valid JSON, it's just the faculty name, so keep the new name
-          fullNameToSave = name;
-        }
+      const storedPassword = storedData?.value;
+      if (!storedPassword) {
+        return res.status(500).json({ error: "Admin password not configured" });
       }
 
-      const { data, error } = await getSupabase()
-        .from("faculty")
-        .update({ name, full_name: fullNameToSave, email })
-        .eq("id", req.params.id)
-        .select()
-        .single();
-      if (error) throw error;
+      // Verify password
+      if (!verifyPassword(passwordInput, storedPassword)) {
+        await logAudit("faculty_update_failed", { faculty_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        return res.status(401).json({ error: "Invalid password" });
+      }
 
-      await logAudit("faculty_updated", { faculty_id: req.params.id, name, email }, req);
-      res.json(data);
+      // Input validation with validators
+      try {
+        const name = validators.name(req.body?.name);
+        const email = validators.email(req.body?.email);
+        const department_id = typeof req.body?.department_id === "string" ? req.body.department_id.trim() : null;
+        const college_id = typeof req.body?.college_id === "string" ? req.body.college_id.trim() : null;
+
+        // Validate IDs if provided
+        if (department_id) {
+          validators.departmentId(department_id);
+        }
+        if (college_id) {
+          validators.collegeId(college_id);
+        }
+
+        // If both college_id and department_id are provided, verify relationship
+        if (college_id && department_id) {
+          const { data: dept, error: deptError } = await getSupabase()
+            .from("departments")
+            .select("college_id")
+            .eq("id", department_id)
+            .maybeSingle();
+
+          if (deptError) throw deptError;
+          if (!dept) {
+            return res.status(400).json({ error: "Department not found" });
+          }
+          if (dept.college_id !== college_id) {
+            return res.status(400).json({ error: "Department does not belong to the selected college" });
+          }
+        }
+
+        // If only department_id is provided, verify it exists
+        if (department_id && !college_id) {
+          const { data: dept, error: deptError } = await getSupabase()
+            .from("departments")
+            .select("id")
+            .eq("id", department_id)
+            .maybeSingle();
+
+          if (deptError) throw deptError;
+          if (!dept) {
+            return res.status(400).json({ error: "Department not found" });
+          }
+        }
+
+        // If only college_id is provided, verify it exists
+        if (college_id && !department_id) {
+          const { data: college, error: collegeError } = await getSupabase()
+            .from("colleges")
+            .select("id")
+            .eq("id", college_id)
+            .maybeSingle();
+
+          if (collegeError) throw collegeError;
+          if (!college) {
+            return res.status(400).json({ error: "College not found" });
+          }
+        }
+
+        // Fetch current faculty data to preserve availability
+        const { data: currentFaculty, error: fetchError } = await getSupabase()
+          .from("faculty")
+          .select("full_name")
+          .eq("id", req.params.id)
+          .maybeSingle();
+
+        if (fetchError) throw fetchError;
+        if (!currentFaculty) {
+          return res.status(404).json({ error: "Faculty not found" });
+        }
+
+        // Check if full_name contains JSON availability data
+        let fullNameToSave = name;
+        if (currentFaculty.full_name) {
+          try {
+            const parsed = JSON.parse(currentFaculty.full_name);
+            // If it's an array (availability data), preserve it
+            if (Array.isArray(parsed)) {
+              fullNameToSave = JSON.stringify(parsed);
+            }
+          } catch (e) {
+            // If it's not valid JSON, it's just the faculty name
+            fullNameToSave = name;
+          }
+        }
+
+        // Build update data
+        const updateData: any = { name, full_name: fullNameToSave, email };
+        if (department_id) {
+          updateData.department_id = department_id;
+        }
+        if (college_id) {
+          updateData.college_id = college_id;
+        }
+
+        const { data, error } = await getSupabase()
+          .from("faculty")
+          .update(updateData)
+          .eq("id", req.params.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        await logAudit("faculty_updated", { faculty_id: req.params.id, name, email, department_id, college_id }, req);
+        res.json(data);
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("Faculty update error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 

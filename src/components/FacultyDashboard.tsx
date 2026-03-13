@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut } from "lucide-react";
+import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
 
 interface Consultation {
@@ -68,6 +68,11 @@ export default function FacultyDashboard() {
   const [manualMeetFallbackOpen, setManualMeetFallbackOpen] = useState<Record<number, boolean>>({});
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [availabilitySlots, setAvailabilitySlots] = useState<{day: string, start: string, end: string}[]>([]);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const sessionWindowRef = useRef<Window | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
@@ -863,6 +868,74 @@ export default function FacultyDashboard() {
     setAvailabilitySlots(newSlots);
   };
 
+  const openPasswordModal = () => {
+    setPasswordInput("");
+    setPasswordConfirm("");
+    setPasswordError("");
+    setShowPasswordModal(true);
+  };
+
+  const closePasswordModal = () => {
+    setShowPasswordModal(false);
+    setPasswordInput("");
+    setPasswordConfirm("");
+    setPasswordError("");
+  };
+
+  const handleSavePassword = async () => {
+    if (!selectedFaculty) return;
+
+    setPasswordError("");
+
+    if (!passwordInput) {
+      setPasswordError("New password is required");
+      return;
+    }
+
+    if (!passwordConfirm) {
+      setPasswordError("Please confirm your password");
+      return;
+    }
+
+    if (passwordInput.length < 8) {
+      setPasswordError("Password must be at least 8 characters");
+      return;
+    }
+
+    if (passwordInput.length > 128) {
+      setPasswordError("Password is too long");
+      return;
+    }
+
+    if (passwordInput !== passwordConfirm) {
+      setPasswordError("Passwords do not match");
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const response = await fetch(`/api/faculty/${selectedFaculty}/change-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordInput }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        setPasswordError(error.error || "Failed to update password");
+        return;
+      }
+
+      closePasswordModal();
+      alert("Password updated successfully!");
+    } catch (err: any) {
+      console.error("Failed to save password", err);
+      setPasswordError("Network error. Please try again.");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   const generateTimeOptions = () => {
     const options = [];
     for (let i = 0; i < 24; i++) {
@@ -1141,6 +1214,13 @@ export default function FacultyDashboard() {
                   {selectedFacultyData.status === 'available' ? 'Go Offline' : 'Go Available'}
                 </button>
 
+                <button
+                  onClick={openPasswordModal}
+                  className="w-full py-3 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <KeyRound className="w-4 h-4" /> Change Password
+                </button>
+
                 <div className="pt-4 border-t border-neutral-200">
                   <p className="text-sm font-bold text-neutral-900 mb-3">Integrations</p>
                   <div className="space-y-3 mb-4">
@@ -1213,62 +1293,85 @@ export default function FacultyDashboard() {
       {showAvailabilityModal && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-4 z-50">
           <div className="bg-white rounded-t-[2rem] sm:rounded-3xl p-5 sm:p-8 max-w-2xl w-full max-h-[90dvh] shadow-2xl flex flex-col">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Consultation Hours</h2>
-              <button onClick={() => setShowAvailabilityModal(false)} className="text-neutral-400 hover:text-neutral-600">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full shrink-0">
+                <Clock className="w-6 h-6 text-indigo-600" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Consultation Hours</h2>
+                <p className="text-sm text-neutral-500 mt-1">Set your available time slots for students</p>
+              </div>
+              <button onClick={() => setShowAvailabilityModal(false)} className="text-neutral-400 hover:text-neutral-600 p-1">
                 <XCircle className="w-6 h-6" />
               </button>
             </div>
             
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1 sm:pr-2">
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1 sm:pr-2 mb-6">
               {availabilitySlots.length === 0 ? (
-                <p className="text-neutral-500 text-center py-8">No time slots set. Add your available hours below.</p>
+                <div className="flex flex-col items-center justify-center py-12 bg-neutral-50 rounded-2xl border-2 border-dashed border-neutral-200">
+                  <Clock className="w-12 h-12 text-neutral-300 mb-3" />
+                  <p className="text-neutral-500 font-medium">No time slots set yet</p>
+                  <p className="text-sm text-neutral-400 mt-1">Add your first available hours below</p>
+                </div>
               ) : (
                 availabilitySlots.map((slot, index) => (
-                  <div key={index} className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 bg-neutral-50 p-4 rounded-xl">
-                    <select
-                      value={slot.day}
-                      onChange={(e) => updateSlot(index, "day", e.target.value)}
-                      className="flex-1 px-4 py-2 rounded-xl border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    >
-                      {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => (
-                        <option key={day} value={day}>{day}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={slot.start}
-                      onChange={(e) => updateSlot(index, "start", e.target.value)}
-                      className="px-4 py-2 rounded-xl border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                    >
-                      {timeOptions.map((time) => (
-                        <option key={time.value} value={time.value}>{time.label}</option>
-                      ))}
-                    </select>
-                    <span className="text-neutral-400 font-medium">to</span>
-                    <select
-                      value={slot.end}
-                      onChange={(e) => updateSlot(index, "end", e.target.value)}
-                      className="px-4 py-2 rounded-xl border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                    >
-                      {timeOptions.map((time) => (
-                        <option key={time.value} value={time.value}>{time.label}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => removeSlot(index)}
-                      className="p-2 text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                    >
-                      <XCircle className="w-5 h-5" />
-                    </button>
+                  <div key={index} className="bg-white border border-neutral-200 rounded-xl p-4 sm:p-5 hover:shadow-md transition-shadow">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                      <div>
+                        <label className="block text-xs font-semibold text-neutral-600 mb-2">Day</label>
+                        <select
+                          value={slot.day}
+                          onChange={(e) => updateSlot(index, "day", e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white"
+                        >
+                          {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => (
+                            <option key={day} value={day}>{day}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-neutral-600 mb-2">Start Time</label>
+                        <select
+                          value={slot.start}
+                          onChange={(e) => updateSlot(index, "start", e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white"
+                        >
+                          {timeOptions.map((time) => (
+                            <option key={time.value} value={time.value}>{time.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-neutral-600 mb-2">End Time</label>
+                        <select
+                          value={slot.end}
+                          onChange={(e) => updateSlot(index, "end", e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white"
+                        >
+                          {timeOptions.map((time) => (
+                            <option key={time.value} value={time.value}>{time.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <button
+                        onClick={() => removeSlot(index)}
+                        className="px-3 py-2 text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition-colors font-medium text-sm"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </div>
 
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center pt-6 border-t border-neutral-100">
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center pt-6 border-t border-neutral-100">
               <button
                 onClick={addSlot}
-                className="px-6 py-3 bg-indigo-50 text-indigo-700 font-medium rounded-xl hover:bg-indigo-100 transition-colors"
+                className="px-6 py-3 bg-indigo-50 text-indigo-700 font-medium rounded-xl hover:bg-indigo-100 transition-colors w-full sm:w-auto"
               >
                 + Add Time Slot
               </button>
@@ -1286,6 +1389,72 @@ export default function FacultyDashboard() {
                   Save Changes
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-4 text-indigo-600 mb-6">
+              <div className="p-3 bg-indigo-100 rounded-full">
+                <KeyRound className="w-6 h-6" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Change Password</h2>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-neutral-700 mb-2">New Password</label>
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => {
+                    setPasswordInput(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="At least 8 characters"
+                  className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-neutral-700 mb-2">Confirm Password</label>
+                <input
+                  type="password"
+                  value={passwordConfirm}
+                  onChange={(e) => {
+                    setPasswordConfirm(e.target.value);
+                    setPasswordError("");
+                  }}
+                  placeholder="Re-enter your new password"
+                  className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                />
+              </div>
+
+              {passwordError && (
+                <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <p className="text-sm text-red-700 font-medium">{passwordError}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-4 mt-8">
+              <button
+                onClick={closePasswordModal}
+                className="flex-1 px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePassword}
+                disabled={passwordSaving}
+                className="flex-1 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium rounded-xl transition-colors shadow-lg shadow-indigo-200"
+              >
+                {passwordSaving ? "Updating..." : "Update Password"}
+              </button>
             </div>
           </div>
         </div>
