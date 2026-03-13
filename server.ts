@@ -4903,15 +4903,15 @@ async function startServer() {
   scheduleConsultationReminders();
 
   // ==========================================
-  // SCHEDULER: Auto-advance queue if student not ready after time passes
+  // SCHEDULER: Auto-advance queue - cancel WAITING students if their time slot passed
   // ==========================================
   const scheduleQueueAutoAdvance = () => {
     const autoAdvanceQueue = async () => {
       try {
-        // Get all waiting consultations
-        const { data: waitingConsultations, error: fetchError } = await getSupabase()
+        // Get all WAITING consultations (queued, not yet being served)
+        const { data: ongoingConsultations, error: fetchError } = await getSupabase()
           .from("queue")
-          .select("id, student_id, student_email, meet_link, faculty_id, students(full_name, email)")
+          .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email)")
           .eq("status", "waiting");
 
         if (fetchError) {
@@ -4919,7 +4919,7 @@ async function startServer() {
           return;
         }
 
-        if (!waitingConsultations || waitingConsultations.length === 0) {
+        if (!ongoingConsultations || ongoingConsultations.length === 0) {
           return;
         }
 
@@ -4928,7 +4928,7 @@ async function startServer() {
         const currentMinutes = now.getMinutes();
         const currentTotalMinutes = currentHours * 60 + currentMinutes;
 
-        for (const consultation of waitingConsultations) {
+        for (const consultation of ongoingConsultations) {
           if (!consultation.meet_link) continue;
 
           const studentName = (consultation as any)?.students?.full_name || "Student";
@@ -4974,13 +4974,13 @@ async function startServer() {
           const endTotalMinutes = endHour * 60 + endMin;
           const minutesPastEnd = currentTotalMinutes - endTotalMinutes;
 
-          // If time has passed and student hasn't started consultation
+          // If time has passed, auto-cancel this waiting consultation
           if (minutesPastEnd > 0) {
-            console.log(`\n⏰ [AUTO-ADVANCE] Consultation ${consultation.id} (${studentName}) ended ${minutesPastEnd} minutes ago`);
-            console.log(`   Status: waiting → cancelling (student not ready)`);
+            console.log(`\n⏰ [AUTO-ADVANCE] WAITING Consultation ${consultation.id} (${studentName}) scheduled time ended ${minutesPastEnd} minutes ago`);
+            console.log(`   Status: ${consultation.status} → cancelling (no-show)`);
 
             try {
-              // Mark as cancelled since student didn't show up in time
+              // Mark as done since student's scheduled time is over and they haven't been served
               const { error: updateError } = await getSupabase()
                 .from("queue")
                 .update({ status: "done" })
@@ -4989,22 +4989,22 @@ async function startServer() {
               if (updateError) {
                 console.error(`   ❌ Failed to update:`, updateError.message);
               } else {
-                console.log(`   ✅ Auto-cancelled expired consultation`);
+                console.log(`   ✅ Auto-cancelled consultation (no-show - time expired)`);
 
                 // Log audit event
-                await logAudit("consultation_auto_cancelled", {
+                await logAudit("consultation_auto_ended", {
                   consultation_id: consultation.id,
                   student_id: consultation.student_id,
                   student_name: studentName,
-                  reason: "student_not_ready_after_time_expired",
-                  minutes_past_end: minutesPastEnd,
+                  reason: "no_show",
+                  minutes_past_time: minutesPastEnd,
                   scheduled_time: timePart
                 });
 
                 // Broadcast to update UI
                 broadcast("queue_updated", { faculty_id: consultation.faculty_id });
 
-                console.log(`   📢 Queue updated - next student can now start`);
+                console.log(`   📢 Queue updated - next waiting student can now be served`);
               }
             } catch (err) {
               console.error(`   ❌ Error during auto-advance:`, err);
@@ -5016,13 +5016,13 @@ async function startServer() {
       }
     };
 
-    // Run every 60 seconds to check if consultations have expired
+    // Run every 60 seconds to check if ongoing consultations have expired
     const intervalId = setInterval(() => {
       autoAdvanceQueue();
     }, 60 * 1000); // 60 seconds
 
     console.log("⏰ Queue auto-advance scheduler started (checks every 60 seconds)");
-    console.log("   ✅ Auto-cancels waiting consultations if time has passed");
+    console.log("   ✅ Auto-cancels WAITING consultations if their scheduled time has passed");
 
     process.on("exit", () => clearInterval(intervalId));
   };
