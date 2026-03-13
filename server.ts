@@ -201,7 +201,11 @@ function isValidAdminSession(token: string, ip: string): boolean {
   const isLocalhost = ip === "127.0.0.1" || ip === "::1" || ip === "localhost" ||
                       session.ip === "127.0.0.1" || session.ip === "::1" || session.ip === "localhost";
   
-  if (!isLocalhost && session.ip !== ip) {
+  // For production on Render/other cloud providers with proxy/load balancers, 
+  // IPs will differ. Only validate in strict development environments.
+  const isProduction = process.env.NODE_ENV === "production";
+  
+  if (!isLocalhost && !isProduction && session.ip !== ip) {
     console.warn(`Session IP mismatch: ${session.ip} vs ${ip}`);
     adminSessions.delete(token);
     return false;
@@ -490,17 +494,37 @@ async function startServer() {
   app.set("trust proxy", 1);
 
   // --- CORS Configuration ---
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:5173").split(",");
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:5173").split(",").map(o => o.trim()).filter(Boolean);
+  
   app.use((req, res, next) => {
     const origin = req.get("origin");
-    // For credentials: "include" to work, we must specify the exact origin, not "*"
-    if (origin && allowedOrigins.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
+    
+    // Check if origin is in allowedOrigins
+    const isOriginAllowed = origin && allowedOrigins.some(allowed => {
+      // Handle wildcard in environment variable (e.g., "*.onrender.com")
+      if (allowed.startsWith("*.")) {
+        const domain = allowed.slice(2);
+        return origin.endsWith(domain) || origin.includes("." + domain);
+      }
+      return origin === allowed;
+    });
+    
+    // For production deployment, accept any onrender.com origin for the same app
+    const isProductionSelf = process.env.NODE_ENV === "production" && 
+                            origin && 
+                            origin.includes("onrender.com") && 
+                            origin.includes("kiosk-sp2");
+    
+    if (isOriginAllowed || isProductionSelf || !origin) {
+      if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+      }
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      res.setHeader("Access-Control-Max-Age", "3600");
+      res.setHeader("Access-Control-Max-Age", "86400");
     }
+    
     if (req.method === "OPTIONS") {
       return res.sendStatus(204);
     }
