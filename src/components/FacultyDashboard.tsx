@@ -143,6 +143,8 @@ export default function FacultyDashboard() {
       Notification.requestPermission();
     }
   }, []);
+
+  useEffect(() => {
     const staffUserId = getStaffSessionUserId();
     if (!staffUserId) {
       navigate("/staff/login");
