@@ -1401,7 +1401,7 @@ async function startServer() {
       res.cookie("admin_session", sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
         maxAge: ADMIN_SESSION_MAX_AGE_MS,
         path: "/"
       });

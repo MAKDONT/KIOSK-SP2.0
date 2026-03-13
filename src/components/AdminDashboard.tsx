@@ -313,7 +313,7 @@ export default function AdminDashboard() {
   };
 
   const fetchLegacyLiveQueue = async (): Promise<LiveQueueItem[]> => {
-    const facultyRes = await fetch("/api/faculty");
+    const facultyRes = await fetch("/api/faculty", { credentials: "include" });
     if (!facultyRes.ok) throw new Error(`Faculty endpoint failed: ${facultyRes.status}`);
     const facultyData = await facultyRes.json();
     if (!Array.isArray(facultyData)) throw new Error("Faculty payload is not an array");
@@ -321,7 +321,7 @@ export default function AdminDashboard() {
     const queueLists = await Promise.all(
       facultyData.map(async (f: any) => {
         try {
-          const queueRes = await fetch(`/api/faculty/${f.id}/queue`);
+          const queueRes = await fetch(`/api/faculty/${f.id}/queue`, { credentials: "include" });
           if (!queueRes.ok) return [];
           const queueData = await queueRes.json();
           if (!Array.isArray(queueData)) return [];
@@ -408,7 +408,7 @@ export default function AdminDashboard() {
 
   const fetchFaculties = async (retries = 3) => {
     try {
-      const res = await fetch("/api/faculty");
+      const res = await fetch("/api/faculty", { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -424,7 +424,7 @@ export default function AdminDashboard() {
 
   const fetchColleges = async (retries = 3) => {
     try {
-      const res = await fetch("/api/colleges");
+      const res = await fetch("/api/colleges", { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -443,7 +443,7 @@ export default function AdminDashboard() {
 
   const fetchDepartments = async (retries = 3) => {
     try {
-      const res = await fetch("/api/departments");
+      const res = await fetch("/api/departments", { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -1809,7 +1809,7 @@ export default function AdminDashboard() {
                 type="email"
                 value={facEmail}
                 onChange={(e) => setFacEmail(e.target.value)}
-                placeholder="e.g. aturing@earist.edu.ph"
+                placeholder="e.g. faculty@example.com"
                 className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
                 required
               />
