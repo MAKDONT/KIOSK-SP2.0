@@ -2421,6 +2421,57 @@ async function startServer() {
         return res.status(400).json({ error: "Student already in queue" });
       }
 
+      // Check if faculty already has a consultation at the same time slot
+      if (faculty_id && time_period) {
+        const today = getCurrentAppDate();
+        console.log(`🔍 Checking double-booking: Faculty ${faculty_id}, Date: ${today}, Time: ${time_period}`);
+        
+        // Fetch all active consultations for this faculty today
+        const { data: allConsultations, error: consultationError } = await getSupabase()
+          .from("queue")
+          .select("*")
+          .eq("faculty_id", faculty_id)
+          .eq("queue_date", today)
+          .in("status", ["waiting", "serving", "ongoing"]);
+
+        if (consultationError) {
+          console.error("❌ Double-booking query error:", consultationError);
+          throw consultationError;
+        }
+
+        console.log(`📊 Found ${allConsultations?.length || 0} existing consultations for this faculty`);
+
+        // Check if any existing consultation has the same time slot
+        if (allConsultations && allConsultations.length > 0) {
+          // First try direct column match
+          const hasDirectMatch = allConsultations.some((consultation: any) => {
+            return consultation.time_period === time_period;
+          });
+
+          if (hasDirectMatch) {
+            console.warn(`⚠️ BLOCKED: Direct time_period match!`);
+            return res.status(400).json({ 
+              error: `This faculty member already has a consultation scheduled at ${time_period}. Please select a different time slot or faculty member.` 
+            });
+          }
+
+          // Fallback: parse from meet_link
+          const hasTimeSlotConflict = allConsultations.some((consultation: any) => {
+            const parts = consultation.meet_link ? String(consultation.meet_link).split('|') : [];
+            const existingTimeSlot = parts.length > 0 ? parts[0] : null;
+            console.log(`  - Parsed time from meet_link: ${existingTimeSlot}`);
+            return existingTimeSlot === time_period;
+          });
+
+          if (hasTimeSlotConflict) {
+            console.warn(`⚠️ BLOCKED: Parsed time match!`);
+            return res.status(400).json({ 
+              error: `This faculty member already has a consultation scheduled at ${time_period}. Please select a different time slot or faculty member.` 
+            });
+          }
+        }
+      }
+
       const targetEmail = student_email || student?.email;
       let meetLinkToSave = time_period || null;
       let generatedMeetLink = null;
@@ -2454,12 +2505,15 @@ async function startServer() {
         // Still proceed - we'll generate it again in the scheduler if needed
       }
 
+      const today = getCurrentAppDate();
       const queueInsertBase = {
         student_id: student.id,
         faculty_id,
         status: "waiting",
         student_email: targetEmail || null,
         meet_link: meetLinkToSave,
+        time_period: time_period || null,
+        queue_date: today,
       };
 
       let { data: info, error } = await getSupabase()
@@ -2477,11 +2531,35 @@ async function startServer() {
           message.includes("purpose") &&
           (message.includes("schema cache") || message.includes("column"));
 
+        const missingTimePeriodColumn =
+          message.includes("time_period") &&
+          (message.includes("schema cache") || message.includes("column"));
+
         if (missingPurposeColumn) {
           console.warn("Queue insert fallback: 'purpose' column not found. Retrying without purpose.");
           const retry = await getSupabase()
             .from("queue")
             .insert(queueInsertBase)
+            .select()
+            .single();
+          info = retry.data;
+          error = retry.error;
+        } else if (missingTimePeriodColumn) {
+          console.warn("Queue insert fallback: 'time_period' column not found. Retrying with meet_link only.");
+          const { student_id, faculty_id, status, student_email, meet_link } = queueInsertBase;
+          const retryBase = {
+            student_id,
+            faculty_id,
+            status,
+            student_email,
+            meet_link,
+          };
+          const retry = await getSupabase()
+            .from("queue")
+            .insert({
+              ...retryBase,
+              purpose: purpose || null,
+            })
             .select()
             .single();
           info = retry.data;
@@ -2536,24 +2614,35 @@ async function startServer() {
   app.get("/api/queue/booked-slots", async (req, res) => {
     try {
       const today = getCurrentAppDate();
+      
+      // Fetch all active queue entries for today with their meet_link
       const { data, error } = await getSupabase()
         .from("queue")
         .select("faculty_id, meet_link")
         .eq("queue_date", today)
         .in("status", ["waiting", "serving", "ongoing"]);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error fetching queue data:", error);
+        throw error;
+      }
 
-      const bookedSlots = data.map((q: any) => {
-        const parts = q.meet_link ? q.meet_link.split('|') : [];
-        return {
-          faculty_id: q.faculty_id,
-          time_period: parts.length > 0 ? parts[0] : null
-        };
-      }).filter((q: any) => q.time_period);
+      // Parse time_period from meet_link (format: "time_period|googleMeetLink")
+      const bookedSlots = (data || [])
+        .map((q: any) => {
+          const parts = q.meet_link ? String(q.meet_link).split('|') : [];
+          const timeSlot = parts.length > 0 ? parts[0] : null;
+          return {
+            faculty_id: q.faculty_id,
+            time_period: timeSlot
+          };
+        })
+        .filter((q: any) => q.time_period && q.faculty_id);
 
+      console.log("📋 Booked slots:", bookedSlots);
       res.json(bookedSlots);
     } catch (err: any) {
+      console.error("❌ Booked slots endpoint error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -4686,6 +4775,128 @@ async function startServer() {
 
   // Start the audit logs deletion scheduler
   scheduleAuditLogsDeletion();
+
+  // ==========================================
+  // DAILY CLEANUP: Clear audit_logs, activity_logs, and old queue entries
+  // ==========================================
+  const scheduleDailyCleanup = () => {
+    const performDailyCleanup = async () => {
+      try {
+        console.log("🧹 Starting daily cleanup...");
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        
+        // Delete audit logs older than 1 day
+        const { error: auditError } = await getSupabase()
+          .from("audit_logs")
+          .delete()
+          .lt("created_at", yesterday);
+        
+        if (auditError) {
+          console.error("❌ Error deleting audit logs:", auditError);
+        } else {
+          console.log("✅ Audit logs cleaned");
+        }
+        
+        // Delete activity logs older than 1 day
+        const { error: activityError } = await getSupabase()
+          .from("activity_logs")
+          .delete()
+          .lt("created_at", yesterday);
+        
+        if (activityError) {
+          console.error("❌ Error deleting activity logs:", activityError);
+        } else {
+          console.log("✅ Activity logs cleaned");
+        }
+        
+        // Delete old queue entries (all entries from past dates)
+        const yesterdayDate = new Date(Date.now() - 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0];
+        
+        const { error: queueError } = await getSupabase()
+          .from("queue")
+          .delete()
+          .lt("queue_date", yesterdayDate);
+        
+        if (queueError) {
+          console.error("❌ Error deleting old queue entries:", queueError);
+        } else {
+          console.log("✅ Queue entries cleaned");
+        }
+        
+        console.log("✅ Daily cleanup completed at", new Date().toISOString());
+      } catch (err) {
+        console.error("❌ Unexpected error during daily cleanup:", err);
+      }
+    };
+
+    // Calculate time until next midnight
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    
+    const timeUntilMidnight = tomorrow.getTime() - now.getTime();
+    
+    console.log(`⏰ Daily cleanup scheduled to run at ${tomorrow.toISOString()}`);
+    
+    // Run at midnight
+    let timeoutId = setTimeout(() => {
+      performDailyCleanup();
+      
+      // Then run every 24 hours
+      const intervalId = setInterval(() => {
+        performDailyCleanup();
+      }, 24 * 60 * 60 * 1000);
+      
+      console.log("Daily cleanup interval started. Will run every 24 hours.");
+      process.on("exit", () => clearInterval(intervalId));
+    }, timeUntilMidnight);
+    
+    process.on("exit", () => clearTimeout(timeoutId));
+  };
+
+  scheduleDailyCleanup();
+
+  // Manual cleanup endpoint (for testing or manual trigger)
+  app.post("/api/admin/cleanup", requireAdminAuth, async (req, res) => {
+    try {
+      console.log("🧹 Manual cleanup triggered");
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      
+      const { error: auditError } = await getSupabase()
+        .from("audit_logs")
+        .delete()
+        .lt("created_at", yesterday);
+      
+      const { error: activityError } = await getSupabase()
+        .from("activity_logs")
+        .delete()
+        .lt("created_at", yesterday);
+      
+      const yesterdayDate = new Date(Date.now() - 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split("T")[0];
+      
+      const { error: queueError } = await getSupabase()
+        .from("queue")
+        .delete()
+        .lt("queue_date", yesterdayDate);
+      
+      if (auditError || activityError || queueError) {
+        return res.status(500).json({ 
+          error: "Cleanup completed with errors",
+          details: { auditError, activityError, queueError }
+        });
+      }
+      
+      res.json({ message: "✅ Daily cleanup completed successfully" });
+    } catch (err: any) {
+      console.error("Error in cleanup endpoint:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // ==========================================
   // SCHEDULER: Send email 5 minutes before consultation
