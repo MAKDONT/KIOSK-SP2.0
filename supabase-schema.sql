@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS queue (
   meet_link TEXT,
   recording_enabled BOOLEAN DEFAULT FALSE,
   source TEXT, -- kiosk, web
-  purpose TEXT
+  purpose TEXT,
+  queue_date DATE DEFAULT CURRENT_DATE,
+  time_period TEXT
 );
 ALTER TABLE queue DISABLE ROW LEVEL SECURITY;
 

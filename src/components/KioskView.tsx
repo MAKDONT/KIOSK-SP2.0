@@ -30,6 +30,7 @@ export default function KioskView() {
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
   const [expandedFaculty, setExpandedFaculty] = useState<string | null>(null);
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<string | null>(null);
+  const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
   const [consultationConcern, setConsultationConcern] = useState("");
   const [bookedSlots, setBookedSlots] = useState<{faculty_id: string, time_period: string}[]>([]);
   const [loading, setLoading] = useState(false);
@@ -390,12 +391,15 @@ export default function KioskView() {
                                   {slots.map((slotObj, idx) => {
                                     const { timeString, isPast } = slotObj;
                                     const isBooked = bookedSlots.some(b => b.faculty_id === f.id && b.time_period === timeString);
-                                    const isDisabled = isBooked || isPast;
+                                    const isSelected = selectedTimePeriod === timeString;
+                                    const isDisabled = isBooked || isPast || isSelected;
                                     
                                     return (
                                       <button
                                         key={idx}
                                         disabled={isDisabled}
+                                        onMouseEnter={() => !isDisabled && setHoveredSlot(timeString)}
+                                        onMouseLeave={() => setHoveredSlot(null)}
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           if (!isDisabled) {
@@ -405,13 +409,15 @@ export default function KioskView() {
                                         }}
                                         className={`w-full py-3 px-2 rounded-lg text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 text-white ${
                                           isDisabled
-                                            ? "opacity-50 cursor-not-allowed bg-gray-400"
-                                            : selectedTimePeriod === timeString
-                                              ? "hover:opacity-90"
-                                              : "hover:opacity-90"
+                                            ? "opacity-50 cursor-not-allowed"
+                                            : "cursor-pointer"
                                         }`}
                                         style={{
-                                          background: isDisabled ? '#999999' : (selectedTimePeriod === timeString ? 'var(--clay-accent-warm)' : 'var(--clay-accent-sky)')
+                                          background: isDisabled 
+                                            ? '#999999' 
+                                            : hoveredSlot === timeString 
+                                              ? 'var(--clay-accent-warm)' 
+                                              : 'var(--clay-accent-sky)'
                                         }}
                                       >
                                         <Clock className="w-4 h-4" />
