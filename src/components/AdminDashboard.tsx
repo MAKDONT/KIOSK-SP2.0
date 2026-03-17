@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download, Mail, Eye, EyeOff } from "lucide-react";
+import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download, Mail, Eye, EyeOff, FileText } from "lucide-react";
 import { safeGetItem, safeClearStorage } from "../utils/storageUtils";
+import AuditLogs from "./AuditLogs";
 
 interface LiveQueueItem {
   id: number;
@@ -36,6 +37,7 @@ export default function AdminDashboard() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [colleges, setColleges] = useState<any[]>([]);
   const [faculties, setFaculties] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<"dashboard" | "audit-logs">("dashboard");
   
   // College form
   const [collegeName, setCollegeName] = useState("");
@@ -685,7 +687,7 @@ export default function AdminDashboard() {
     } catch (err) {
       console.error("Logout API error:", err);
     } finally {
-      localStorage.removeItem("user_role");
+      safeClearStorage();
       navigate("/admin/login");
     }
   };
@@ -1272,6 +1274,43 @@ export default function AdminDashboard() {
         </div>
       </header>
 
+      {/* Tab Navigation */}
+      <div className="bg-white border-b border-neutral-200 px-8 py-4">
+        <div className="max-w-7xl mx-auto flex gap-2">
+          <button
+            onClick={() => setActiveTab("dashboard")}
+            className={`px-6 py-2 font-medium rounded-xl transition-colors ${
+              activeTab === "dashboard"
+                ? "bg-indigo-100 text-indigo-700"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            }`}
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => setActiveTab("audit-logs")}
+            className={`flex items-center gap-2 px-6 py-2 font-medium rounded-xl transition-colors ${
+              activeTab === "audit-logs"
+                ? "bg-indigo-100 text-indigo-700"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+             Logs
+          </button>
+        </div>
+      </div>
+
+      {/* Audit Logs View */}
+      {activeTab === "audit-logs" && (
+        <div className="flex-1 p-8 max-w-7xl mx-auto w-full">
+          <AuditLogs />
+        </div>
+      )}
+
+      {/* Dashboard View */}
+      {activeTab === "dashboard" && (
+        <>
       {/* Admin Google Email Banner */}
       {!adminEmail && (
         <section className="px-8 pt-6 max-w-7xl mx-auto w-full">
@@ -3088,6 +3127,8 @@ export default function AdminDashboard() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -16,6 +16,8 @@ export default function StudentTracking() {
   const navigate = useNavigate();
   const [consultation, setConsultation] = useState<Consultation | null>(null);
   const [error, setError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
 
   useEffect(() => {
     fetchStatus();
@@ -33,6 +35,35 @@ export default function StudentTracking() {
       setConsultation(data);
     } catch (err: any) {
       setError(err.message);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!id || !consultation) return;
+    
+    const confirmed = window.confirm("Are you sure you want to cancel your consultation? This action cannot be undone.");
+    if (!confirmed) return;
+
+    setCancelling(true);
+    setCancelError("");
+    
+    try {
+      const res = await fetch(`/api/queue/${id}/cancel`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to cancel consultation");
+      }
+
+      setConsultation({ ...consultation, status: "cancelled" });
+    } catch (err: any) {
+      setCancelError(err.message || "Failed to cancel consultation");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -102,6 +133,11 @@ export default function StudentTracking() {
               <p className="text-neutral-500 text-center max-w-[250px]">
                 You are currently in the queue. Please wait for your turn.
               </p>
+              {cancelError && (
+                <div className="mt-4 text-red-600 text-sm font-medium bg-red-50 px-4 py-2 rounded-lg">
+                  {cancelError}
+                </div>
+              )}
             </div>
           )}
 
@@ -181,7 +217,16 @@ export default function StudentTracking() {
           )}
         </div>
 
-        <div className="pt-6 border-t border-neutral-200/50 relative z-10">
+        <div className="pt-6 border-t border-neutral-200/50 relative z-10 space-y-3">
+          {consultation.status === "waiting" && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="w-full py-3 bg-red-500 hover:bg-red-600 disabled:bg-red-400 text-white font-bold rounded-2xl transition-colors"
+            >
+              {cancelling ? "Cancelling..." : "Cancel Consultation"}
+            </button>
+          )}
           <button
             onClick={() => navigate("/")}
             className="w-full py-4 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold rounded-2xl transition-colors"

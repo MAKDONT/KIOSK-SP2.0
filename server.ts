@@ -244,20 +244,22 @@ async function logAudit(action: string, details: any, req?: any): Promise<void> 
   try {
     const ip = req?.ip || req?.socket?.remoteAddress || "unknown";
     const userAgent = req?.get?.("user-agent") || "unknown";
+    const timestamp = new Date().toISOString();
     
     const logEntry = {
       action,
-      details: JSON.stringify(details),
+      details,  // Pass as object, Supabase will convert to JSONB
       ip,
       user_agent: userAgent.substring(0, 255),
-      timestamp: new Date().toISOString()
+      timestamp
     };
     
     try {
       await getSupabase()
         .from("audit_logs")
         .insert(logEntry);
-    } catch (insertErr) {
+    } catch (insertErr: any) {
+      console.warn("Failed to insert audit log:", insertErr?.message || String(insertErr));
       // Table might not exist yet, fail silently
     }
     
@@ -488,6 +490,19 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
+
+  // WebSocket connection handler
+  wss.on("connection", (ws) => {
+    console.log("Client connected to WebSocket");
+    
+    ws.on("close", () => {
+      console.log("Client disconnected from WebSocket");
+    });
+
+    ws.on("error", (err) => {
+      console.error("WebSocket client error:", err);
+    });
+  });
 
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
@@ -1447,6 +1462,74 @@ async function startServer() {
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Admin: Verify session (check if admin is still logged in)
+  app.get("/api/admin/verify-session", requireAdminAuth, async (req, res) => {
+    try {
+      res.json({ valid: true });
+    } catch (err: any) {
+      res.status(401).json({ valid: false });
+    }
+  });
+
+  // Admin: Get audit logs with optional filtering
+  app.get("/api/admin/audit-logs", requireAdminAuth, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+      const offset = parseInt(req.query.offset as string) || 0;
+      const action = req.query.action as string;
+
+      let query = getSupabase()
+        .from("audit_logs")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (action) {
+        query = query.eq("action", action);
+      }
+
+      const { data, count, error } = await query;
+
+      if (error) throw error;
+
+      res.json({
+        logs: data || [],
+        total: count || 0,
+        limit,
+        offset,
+      });
+    } catch (err: any) {
+      console.error("Error fetching audit logs:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Activity Logs Endpoint
+  app.get("/api/admin/activity-logs", requireAdminAuth, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const { data, count, error } = await getSupabase()
+        .from("activity_logs")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) throw error;
+
+      res.json({
+        logs: data || [],
+        total: count || 0,
+        limit,
+        offset,
+      });
+    } catch (err: any) {
+      console.error("Error fetching activity logs:", err);
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -3116,6 +3199,80 @@ async function startServer() {
         });
       }
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cancel a consultation
+  app.put("/api/queue/:id/cancel", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Get the consultation to verify it exists
+      const { data: consultation, error: fetchError } = await getSupabase()
+        .from("queue")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (fetchError || !consultation) {
+        return res.status(404).json({ error: "Consultation not found" });
+      }
+
+      if (consultation.status === "cancelled") {
+        return res.status(400).json({ error: "Consultation is already cancelled" });
+      }
+
+      if (consultation.status !== "waiting") {
+        return res.status(400).json({ error: "Can only cancel consultations that are waiting" });
+      }
+
+      // Update status to cancelled
+      const { data: updated, error: updateError } = await getSupabase()
+        .from("queue")
+        .update({ status: "cancelled" })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // Broadcast the update
+      broadcast("queue_updated", { faculty_id: consultation.faculty_id });
+
+      // Send notification email if email exists
+      const { data: student } = await getSupabase()
+        .from("students")
+        .select("*")
+        .eq("id", consultation.student_id)
+        .single();
+
+      if (student?.email) {
+        const { data: faculty } = await getSupabase()
+          .from("faculty")
+          .select("name")
+          .eq("id", consultation.faculty_id)
+          .single();
+
+        sendEmailNotification(
+          student.email,
+          "Consultation Cancelled",
+          `
+          <h2>Cancellation Confirmation</h2>
+          <p>Hi ${student.name},</p>
+          <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> has been cancelled.</p>
+          <p>If you wish to schedule another consultation, please visit the kiosk or web application.</p>
+          <br/>
+          <p>Thank you!</p>
+          `
+        );
+      }
+
+      res.json({ message: "Consultation cancelled successfully", data: updated });
+    } catch (err: any) {
+      console.error("Error cancelling consultation:", err);
       res.status(500).json({ error: err.message });
     }
   });

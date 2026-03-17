@@ -19,9 +19,25 @@ export default function AdminLogin() {
   const oauthWindowRef = useRef<Window | null>(null);
 
   useEffect(() => {
-    if (safeGetItem("user_role") === "admin") {
-      navigate("/admin/dashboard");
-    }
+    // Verify admin session with backend instead of just checking localStorage
+    const verifyAdminSession = async () => {
+      try {
+        const res = await fetch("/api/admin/verify-session", {
+          credentials: "include",
+        });
+        if (res.ok) {
+          navigate("/admin/dashboard");
+        } else {
+          // Invalid session - clear localStorage
+          localStorage.removeItem("user_role");
+        }
+      } catch (err) {
+        console.error("Session verification failed:", err);
+        localStorage.removeItem("user_role");
+      }
+    };
+
+    verifyAdminSession();
   }, [navigate]);
 
   useEffect(() => {
