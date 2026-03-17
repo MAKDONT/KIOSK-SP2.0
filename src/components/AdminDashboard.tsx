@@ -1301,16 +1301,18 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Audit Logs View */}
-      {activeTab === "audit-logs" && (
-        <div className="flex-1 p-8 max-w-7xl mx-auto w-full">
-          <AuditLogs />
-        </div>
-      )}
+      {/* Content Area */}
+      <div className="flex-1 overflow-y-auto">
+        {/* Audit Logs View */}
+        {activeTab === "audit-logs" && (
+          <div className="p-8 max-w-7xl mx-auto w-full">
+            <AuditLogs />
+          </div>
+        )}
 
-      {/* Dashboard View */}
-      {activeTab === "dashboard" && (
-        <>
+        {/* Dashboard View */}
+        {activeTab === "dashboard" && (
+          <>
       {/* Admin Google Email Banner */}
       {!adminEmail && (
         <section className="px-8 pt-6 max-w-7xl mx-auto w-full">
