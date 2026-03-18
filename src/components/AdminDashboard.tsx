@@ -1666,7 +1666,7 @@ export default function AdminDashboard() {
                 value={collegeName}
                 onChange={(e) => setCollegeName(e.target.value)}
                 placeholder="e.g. College of Engineering"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-purple-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1679,8 +1679,8 @@ export default function AdminDashboard() {
                 type="text"
                 value={collegeCode}
                 onChange={(e) => setCollegeCode(e.target.value)}
-                placeholder="e.g. COE"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-purple-500 focus:ring-0 outline-none transition-colors"
+                placeholder="e.g. CEN"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1688,7 +1688,7 @@ export default function AdminDashboard() {
             <button
               type="submit"
               disabled={addingCollege || !collegeName || !collegeCode}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-100 hover:bg-purple-200 disabled:bg-neutral-100 disabled:cursor-not-allowed text-purple-800 font-medium rounded-xl transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-100 disabled:cursor-not-allowed text-white font-medium rounded-xl transition-colors"
             >
               <Plus className="w-4 h-4" />
               {addingCollege ? "Adding..." : "Add College"}
@@ -1750,7 +1750,7 @@ export default function AdminDashboard() {
                 <select
                   value={collegeId}
                   onChange={(e) => setCollegeId(e.target.value)}
-                  className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-blue-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                   required
                 >
                   <option value="" disabled>Select College</option>
@@ -1771,7 +1771,7 @@ export default function AdminDashboard() {
                   value={collegeId}
                   onChange={(e) => setCollegeId(e.target.value)}
                   placeholder="e.g. 1"
-                  className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-blue-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                   required
                 />
               </div>
@@ -1786,7 +1786,7 @@ export default function AdminDashboard() {
                 value={deptName}
                 onChange={(e) => setDeptName(e.target.value)}
                 placeholder="e.g. Computer Engineering"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-blue-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1800,7 +1800,7 @@ export default function AdminDashboard() {
                 value={deptCode}
                 onChange={(e) => setDeptCode(e.target.value)}
                 placeholder="e.g. BSCpE"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-blue-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1808,7 +1808,7 @@ export default function AdminDashboard() {
             <button
               type="submit"
               disabled={addingDept || !deptName || !deptCode || !collegeId}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-100 hover:bg-blue-200 disabled:bg-neutral-100 disabled:cursor-not-allowed text-blue-800 font-medium rounded-xl transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-100 disabled:cursor-not-allowed text-white font-medium rounded-xl transition-colors"
             >
               <Plus className="w-4 h-4" />
               {addingDept ? "Adding..." : "Add Department"}
@@ -1876,7 +1876,7 @@ export default function AdminDashboard() {
                 value={facName}
                 onChange={(e) => setFacName(e.target.value)}
                 placeholder="e.g. Dr. Alan Turing"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1891,7 +1891,7 @@ export default function AdminDashboard() {
                   setFacCollege(e.target.value);
                   setFacDept("");
                 }}
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               >
                 <option value="" disabled>Select College</option>
@@ -1911,7 +1911,7 @@ export default function AdminDashboard() {
                 value={facDept}
                 onChange={(e) => setFacDept(e.target.value)}
                 disabled={!facCollege}
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               >
                 <option value="" disabled>
@@ -1934,7 +1934,7 @@ export default function AdminDashboard() {
                 value={facEmail}
                 onChange={(e) => setFacEmail(e.target.value)}
                 placeholder="e.g. faculty@example.com"
-                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                className="w-full p-4 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 required
               />
             </div>
@@ -1949,7 +1949,7 @@ export default function AdminDashboard() {
                   value={facPassword}
                   onChange={(e) => setFacPassword(e.target.value)}
                   placeholder="Enter password"
-                  className="w-full p-4 pr-12 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full p-4 pr-12 border-2 border-neutral-200 rounded-2xl bg-neutral-50 focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                   required
                 />
                 <button
@@ -1965,7 +1965,7 @@ export default function AdminDashboard() {
             <button
               type="submit"
               disabled={addingFac || !facName || !facCollege || !facDept || !facEmail || !facPassword}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-emerald-100 hover:bg-emerald-200 disabled:bg-neutral-100 disabled:cursor-not-allowed text-emerald-800 font-medium rounded-xl transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-neutral-100 disabled:cursor-not-allowed text-white font-medium rounded-xl transition-colors"
             >
               <Plus className="w-4 h-4" />
               {addingFac ? "Adding..." : "Add Faculty"}
@@ -2044,7 +2044,6 @@ export default function AdminDashboard() {
                                 <tr className="border-b border-neutral-100">
                                   <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Name</th>
                                   <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Email</th>
-                                  <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Faculty Code</th>
                                   <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs">Status</th>
                                   <th className="py-3 px-4 font-bold text-neutral-600 uppercase tracking-wider text-xs text-right">Actions</th>
                                 </tr>
@@ -2054,7 +2053,6 @@ export default function AdminDashboard() {
                                   <tr key={fac.id} className="hover:bg-neutral-50 transition-colors group">
                                     <td className="py-4 px-4 font-medium text-neutral-900">{fac.name}</td>
                                     <td className="py-4 px-4 text-neutral-600">{fac.email}</td>
-                                    <td className="py-4 px-4 font-mono text-sm text-neutral-500">{fac.faculty_code}</td>
                                     <td className="py-4 px-4">
                                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                         fac.status === 'available' ? 'bg-green-100 text-green-800' :
@@ -2117,7 +2115,6 @@ export default function AdminDashboard() {
                       <tr className="border-b-2 border-neutral-100">
                         <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Name</th>
                         <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Email</th>
-                        <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Faculty Code</th>
                         <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Department</th>
                         <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm">Status</th>
                         <th className="py-4 px-4 font-bold text-neutral-600 uppercase tracking-wider text-sm text-right">Actions</th>
@@ -2132,7 +2129,6 @@ export default function AdminDashboard() {
                         <tr key={fac.id} className="hover:bg-neutral-50 transition-colors group">
                           <td className="py-4 px-4 font-medium text-neutral-900">{fac.name}</td>
                           <td className="py-4 px-4 text-neutral-600">{fac.email}</td>
-                          <td className="py-4 px-4 font-mono text-sm text-neutral-500">{fac.faculty_code}</td>
                           <td className="py-4 px-4 text-neutral-600">
                             {departmentById.get(String(fac.department_id))?.name || fac.department || "Unknown Department"}
                           </td>
@@ -2623,7 +2619,7 @@ export default function AdminDashboard() {
                     setCreateCollegePasswordError("");
                   }}
                   placeholder="Enter your admin password"
-                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-purple-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 />
                 <button
                   type="button"
@@ -2684,7 +2680,7 @@ export default function AdminDashboard() {
                     setCreateDeptPasswordError("");
                   }}
                   placeholder="Enter your admin password"
-                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-blue-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 />
                 <button
                   type="button"
@@ -2745,7 +2741,7 @@ export default function AdminDashboard() {
                     setCreateFacPasswordError("");
                   }}
                   placeholder="Enter your admin password"
-                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-emerald-500 focus:ring-0 outline-none transition-colors"
+                  className="w-full px-4 py-2 pr-10 border-2 border-neutral-300 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none transition-colors"
                 />
                 <button
                   type="button"

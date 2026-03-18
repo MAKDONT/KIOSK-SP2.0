@@ -45,7 +45,9 @@ export default function AuditLogs() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/admin/audit-logs?limit=${limit}&offset=${offset}`);
+      const res = await fetch(`/api/admin/audit-logs?limit=${limit}&offset=${offset}`, {
+        credentials: 'include'
+      });
       if (!res.ok) throw new Error("Failed to fetch audit logs");
       const data = await res.json();
       setAuditLogs(data.logs);
@@ -61,7 +63,9 @@ export default function AuditLogs() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/admin/activity-logs?limit=${limit}&offset=${offset}`);
+      const res = await fetch(`/api/admin/activity-logs?limit=${limit}&offset=${offset}`, {
+        credentials: 'include'
+      });
       if (!res.ok) throw new Error("Failed to fetch activity logs");
       const data = await res.json();
       setActivityLogs(data.logs);

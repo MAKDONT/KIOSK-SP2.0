@@ -269,6 +269,34 @@ async function logAudit(action: string, details: any, req?: any): Promise<void> 
   }
 }
 
+// Log business activities (consultations, faculty actions, admin changes)
+async function logActivity(action: string, target_type: string, target_id: string | null, actor_email: string | null, actor_role: string, details: any = {}): Promise<void> {
+  try {
+    const logEntry = {
+      created_at: new Date().toISOString(),
+      actor_email,
+      actor_role,
+      action,
+      target_type,
+      target_id,
+      details
+    };
+    
+    try {
+      await getSupabase()
+        .from("activity_logs")
+        .insert(logEntry);
+    } catch (insertErr: any) {
+      console.warn("Failed to insert activity log:", insertErr?.message || String(insertErr));
+      // Table might not exist yet, fail silently
+    }
+    
+    console.log(`[ACTIVITY] [${actor_role}:${actor_email}] ${action} on ${target_type}${target_id ? `#${target_id}` : ''}:`, details);
+  } catch (err: any) {
+    console.error("Failed to log activity:", err.message);
+  }
+}
+
 function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
   const credentialsFilePath = unwrapEnvValue(process.env.GOOGLE_SERVICE_ACCOUNT_FILE);
   if (credentialsFilePath) {
@@ -1315,6 +1343,7 @@ async function startServer() {
         .upsert({ key: "admin_email", value: email }, { onConflict: "key" });
       
       await logAudit("admin_email_updated", { email }, req);
+      await logActivity("email_updated", "admin_settings", "admin_email", email, "admin", { new_email: email });
       res.json({ success: true });
     } catch (err: any) {
       console.error("Admin email update error:", err);
@@ -1393,6 +1422,7 @@ async function startServer() {
           .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
         
         await logAudit("admin_password_reset", { email: validatedEmail, ip }, req);
+        await logActivity("password_reset", "admin_settings", "admin_password", validatedEmail, "admin", { email: validatedEmail });
         res.json({ success: true });
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1444,6 +1474,15 @@ async function startServer() {
 
       const sessionToken = createAdminSession(ip, req.get("user-agent") || "");
       await logAudit("admin_login_success", { ip }, req);
+      
+      // Log admin login activity - fetch email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+      await logActivity("login", "admin", null, adminEmail, "admin", { ip });
 
       res.cookie("admin_session", sessionToken, {
         httpOnly: true,
@@ -1490,29 +1529,40 @@ async function startServer() {
       const offset = parseInt(req.query.offset as string) || 0;
       const action = req.query.action as string;
 
-      let query = getSupabase()
+      // Build query - start simple without count
+      let query: any = getSupabase()
         .from("audit_logs")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+        .select("*")
+        .order("created_at", { ascending: false });
 
       if (action) {
         query = query.eq("action", action);
       }
 
-      const { data, count, error } = await query;
+      const { data, error } = await query;
 
-      if (error) throw error;
+      if (error) {
+        console.error("Query error:", error);
+        throw error;
+      }
+
+      if (!Array.isArray(data)) {
+        return res.status(500).json({ error: "Invalid response format from database" });
+      }
+
+      // Handle pagination manually
+      const totalCount = data.length;
+      const paginatedData = data.slice(offset, offset + limit);
 
       res.json({
-        logs: data || [],
-        total: count || 0,
+        logs: paginatedData,
+        total: totalCount,
         limit,
         offset,
       });
     } catch (err: any) {
       console.error("Error fetching audit logs:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message || "Failed to fetch audit logs" });
     }
   });
 
@@ -1522,23 +1572,33 @@ async function startServer() {
       const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
       const offset = parseInt(req.query.offset as string) || 0;
 
-      const { data, count, error } = await getSupabase()
+      const { data, error } = await getSupabase()
         .from("activity_logs")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+        .select("*")
+        .order("created_at", { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Query error:", error);
+        throw error;
+      }
+
+      if (!Array.isArray(data)) {
+        return res.status(500).json({ error: "Invalid response format from database" });
+      }
+
+      // Handle pagination manually
+      const totalCount = data.length;
+      const paginatedData = data.slice(offset, offset + limit);
 
       res.json({
-        logs: data || [],
-        total: count || 0,
+        logs: paginatedData,
+        total: totalCount,
         limit,
         offset,
       });
     } catch (err: any) {
       console.error("Error fetching activity logs:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message || "Failed to fetch activity logs" });
     }
   });
 
@@ -1672,6 +1732,7 @@ async function startServer() {
         
         if (error) throw error;
         await logAudit("college_created", { name, code }, req);
+        await logActivity("college_created", "college", data.id, null, "admin", { name, code });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1726,6 +1787,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("college_updated", { college_id: req.params.id, name, code }, req);
+        await logActivity("college_updated", "college", req.params.id, null, "admin", { name, code });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1791,6 +1853,7 @@ async function startServer() {
           .single();
         if (error) throw error;
         await logAudit("department_created", { name, college_id, code }, req);
+        await logActivity("department_created", "department", String(data.id), null, "admin", { name, code, college_id });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1858,6 +1921,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("department_updated", { department_id: req.params.id, name, college_id }, req);
+        await logActivity("department_updated", "department", req.params.id, null, "admin", { name, college_id });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1987,12 +2051,19 @@ async function startServer() {
       }
 
       // Proceed with deletion
+      const { data: facultyToDelete } = await getSupabase()
+        .from("faculty")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
+      
       const { error } = await getSupabase()
         .from("faculty")
         .delete()
         .eq("id", req.params.id);
       if (error) throw error;
       await logAudit("faculty_deleted", { faculty_id: req.params.id }, req);
+      await logActivity("faculty_deleted", "faculty", req.params.id, facultyToDelete?.email || null, "admin", { name: facultyToDelete?.name });
       res.json({ success: true });
     } catch (err: any) {
       console.error("Faculty deletion error:", err);
@@ -2146,6 +2217,7 @@ async function startServer() {
       
       const { password: _pw, ...safeData } = data;
       await logAudit("faculty_created", { faculty_id: id, name }, req);
+      await logActivity("faculty_created", "faculty", id, normalizedEmail, "admin", { name, email: normalizedEmail, department_id });
       res.json(safeData);
     } catch (err: any) {
       console.error("Faculty creation error:", err);
@@ -2254,6 +2326,7 @@ async function startServer() {
 
       // Log successful login
       await logAudit("faculty_login_success", { email: normalizedEmail, ip }, req);
+      await logActivity("login", "faculty", data.id, normalizedEmail, "faculty", { name: data.name });
 
       // Return faculty data without the password
       const { password: _pw, ...safeData } = data;
@@ -2695,6 +2768,16 @@ async function startServer() {
       }
 
       broadcast("queue_updated", { faculty_id });
+      
+      // Log consultation creation
+      await logActivity("consultation_created", "consultation", String(info.id), student.email || null, "student", {
+        student_name: formatted.student_name,
+        faculty_id,
+        faculty_name: formatted.faculty_name,
+        purpose: purpose || null,
+        source: source || null
+      });
+      
       res.json(formatted);
     } catch (err: any) {
       console.error("Queue join error:", err);
@@ -2874,6 +2957,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("faculty_updated", { faculty_id: req.params.id, name, email, department_id, college_id }, req);
+        await logActivity("faculty_updated", "faculty", req.params.id, email, "admin", { name, department_id, college_id });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -3164,6 +3248,16 @@ async function startServer() {
         recording_enabled: recording_enabled === true
       }, req);
 
+      // Log consultation status change as activity
+      const actionMap = { "serving": "consultation_started", "completed": "consultation_completed", "cancelled": "consultation_cancelled", "waiting": "consultation_waiting" };
+      const activityAction = actionMap[status as keyof typeof actionMap] || `consultation_${status}`;
+      await logActivity(activityAction, "consultation", consultationId, null, "faculty", {
+        status: status,
+        recording_enabled: recording_enabled === true,
+        student_id: consultation.student_id,
+        student_name: consultation.student_name
+      });
+
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
       res.json({ success: true, meet_link: final_email_link || null });
     } catch (err: any) {
@@ -3251,10 +3345,10 @@ async function startServer() {
       // Broadcast the update
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
 
-      // Send notification email if email exists
+      // Send notification email to student if email exists
       const { data: student } = await getSupabase()
         .from("students")
-        .select("*")
+        .select("email")
         .eq("id", consultation.student_id)
         .single();
 
@@ -3270,7 +3364,7 @@ async function startServer() {
           "Consultation Cancelled",
           `
           <h2>Cancellation Confirmation</h2>
-          <p>Hi ${student.name},</p>
+          <p>Hi ${consultation.student_name || "Student"},</p>
           <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> has been cancelled.</p>
           <p>If you wish to schedule another consultation, please visit the kiosk or web application.</p>
           <br/>
