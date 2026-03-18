@@ -565,6 +565,15 @@ async function startServer() {
     res.json({ ok: true, uptime: Math.floor(process.uptime()) });
   });
 
+  // Simple ping endpoint for UptimeRobot and other monitoring services
+  app.get("/ping", (_req, res) => {
+    res.status(200).send("OK");
+  });
+
+  app.get("/health", (_req, res) => {
+    res.status(200).send("OK");
+  });
+
   // --- Input Validators ---
   const validators = {
     studentId: (value: any): string => {
