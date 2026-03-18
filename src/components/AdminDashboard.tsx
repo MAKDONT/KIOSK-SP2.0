@@ -2972,6 +2972,10 @@ export default function AdminDashboard() {
         </div>
       )}
 
+          </>
+        )}
+      </div>
+
       {adminPasswordModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
