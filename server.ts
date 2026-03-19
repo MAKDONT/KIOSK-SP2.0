@@ -5404,11 +5404,15 @@ async function startServer() {
     };
 
     // Run immediately on server start
-    sendReminderEmails();
+    sendReminderEmails().catch(err => {
+      console.error("❌ Error in initial scheduler run:", err instanceof Error ? err.message : String(err));
+    });
 
     // Then run every 30 seconds to catch both 5-minute advance and on-time windows
     const intervalId = setInterval(() => {
-      sendReminderEmails();
+      sendReminderEmails().catch(err => {
+        console.error("❌ Error in scheduled run:", err instanceof Error ? err.message : String(err));
+      });
     }, 30 * 1000); // 30 seconds
 
     console.log("📬 Consultation notification scheduler started (checks every 30 seconds)");
