@@ -2751,18 +2751,20 @@ async function startServer() {
       };
 
       if (targetEmail) {
-        sendEmailNotification(
+        await sendEmailNotification(
           targetEmail,
-          "Consultation Booking Receipt",
+          "Consultation Booking Confirmed",
           `
-          <h2>Booking Confirmed</h2>
+          <h2>Consultation Booking Confirmed</h2>
           <p>Hi ${formatted.student_name || 'Student'},</p>
-          <p>You have successfully joined the queue for a consultation with <strong>${formatted.faculty_name || 'your selected faculty'}</strong>.</p>
+          <p>You have successfully joined the queue for a consultation.</p>
+          <p><strong>Faculty:</strong> ${formatted.faculty_name || 'Your selected faculty'}</p>
           ${time_period ? `<p><strong>Time Slot:</strong> ${time_period}</p>` : ''}
-          <p><strong>Virtual Consultation Room:</strong> You will receive the Google Meet link via email when your consultation time arrives.</p>
-          <p>Please keep this email. You can track your status on the kiosk or wait for further notifications.</p>
+          <p>You will receive a reminder email when your consultation time is approaching.</p>
+          <p>You can track your status on the kiosk or web application at any time.</p>
+          <p>If you have any questions, please contact the faculty office.</p>
           <br/>
-          <p>Thank you!</p>
+          <p>Best regards,<br/>Consultation System</p>
           `
         );
       }
@@ -3361,16 +3363,16 @@ async function startServer() {
 
         const studentName = student.full_name || consultation.student_name || "Student";
 
-        sendEmailNotification(
+        await sendEmailNotification(
           student.email,
           "Consultation Cancelled",
           `
-          <h2>Cancellation Confirmation</h2>
+          <h2>Consultation Cancelled</h2>
           <p>Hi ${studentName},</p>
           <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> has been cancelled.</p>
           <p>If you wish to schedule another consultation, please visit the kiosk or web application.</p>
           <br/>
-          <p>Thank you!</p>
+          <p>Best regards,<br/>Consultation System</p>
           `
         );
       }
@@ -4900,20 +4902,21 @@ async function startServer() {
       console.log(`\n📧 Triggering email notification to: ${student_email_to_notify}`);
       
       try {
-        sendEmailNotification(
+        await sendEmailNotification(
           student_email_to_notify,
-          "Your turn is coming up!",
+          "Consultation Reminder - 5 Minutes Until Start",
           `
-          <h2>Next in Queue</h2>
+          <h2>Consultation Reminder</h2>
           <p>Hi Test Student,</p>
-          <p>You are next in the queue for your consultation!</p>
+          <p><strong>Your consultation is starting in 5 minutes!</strong></p>
           <p><strong>Time Slot:</strong> 10:30-11:00</p>
-          <p>Please be ready to join the meeting.</p>
-          <p>Join the meeting here: <a href="${testMeetLink}">${testMeetLink}</a></p>
-          <p>If you are not ready, please notify the faculty immediately.</p>
+          <p>Please prepare and be ready to join the consultation.</p>
+          <p><strong>Meeting Link:</strong> <a href="${testMeetLink}">${testMeetLink}</a></p>
+          <br/>
+          <p>Best regards,<br/>Consultation System</p>
           `
         );
-        console.log(`✅ EMAIL CALLING FUNCTION EXECUTED for ${student_email_to_notify}`);
+        console.log(`✅ EMAIL SENT SUCCESSFULLY for ${student_email_to_notify}`);
       } catch (emailErr) {
         console.error(`❌ ERROR in email function:`, emailErr instanceof Error ? emailErr.message : String(emailErr));
         return res.status(500).json({ 
@@ -5311,20 +5314,22 @@ async function startServer() {
               console.log(`   ✅ SENDING 5-MINUTE ADVANCE EMAIL TO STUDENT`);
               if (studentEmail) {
                 console.log(`   📧 Sending advance reminder to ${studentEmail}...`);
-                sendEmailNotification(
+                await sendEmailNotification(
                   studentEmail,
-                  `Consultation reminder - ${timePart}`,
+                  "Consultation Reminder - 5 Minutes Until Start",
                   `
                   <h2>Consultation Reminder</h2>
                   <p>Hi ${studentName},</p>
-                  <p><strong>Your consultation is in 5 minutes!</strong></p>
+                  <p><strong>Your consultation is starting in 5 minutes!</strong></p>
                   <p><strong>Time:</strong> ${timePart}</p>
-                  <p>Please prepare and get ready to join the meeting.</p>
-                  <p><strong>Join here:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <p>Please prepare and be ready to join the consultation.</p>
+                  <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <br/>
+                  <p>Best regards,<br/>Consultation System</p>
                   `
                 );
                 sentAdvanceEmails.add(consultation.id);
-                console.log(`   ✅ Advance email queued for sending (via SendGrid)`);
+                console.log(`   ✅ Advance email sent (via SendGrid)`);
 
                 // Log audit event for advance email
                 await logAudit("consultation_advance_reminder_email_sent", {
@@ -5344,20 +5349,22 @@ async function startServer() {
               console.log(`   ✅ SENDING ON-TIME NOTIFICATION!`);
               if (studentEmail) {
                 console.log(`   📧 Sending on-time email to ${studentEmail}...`);
-                sendEmailNotification(
+                await sendEmailNotification(
                   studentEmail,
-                  `Your consultation is NOW! Join here!`,
+                  "Your Consultation is Starting Now",
                   `
-                  <h2>Your Consultation is Starting Now!</h2>
+                  <h2>Your Consultation is Starting Now</h2>
                   <p>Hi ${studentName},</p>
-                  <p><strong>Your consultation is starting NOW!</strong></p>
+                  <p><strong>Your consultation is starting now!</strong></p>
                   <p><strong>Time:</strong> ${timePart}</p>
-                  <p>Please join the meeting immediately.</p>
-                  <p><strong>Join here:</strong> <a href="${meetLink}">${meetLink}</a></p>
-                  <p>If you have any issues, please contact the faculty right away.</p>
+                  <p>Please join the meeting immediately using the link below.</p>
+                  <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <p>If you experience any issues, please contact the faculty right away.</p>
+                  <br/>
+                  <p>Best regards,<br/>Consultation System</p>
                   `
                 );
-                console.log(`   ✅ On-time email queued for sending (via SendGrid)`);
+                console.log(`   ✅ On-time email sent (via SendGrid)`);
 
                 // Broadcast notification to faculty for this consultation (FACULTY ONLY GETS THIS)
                 console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation STARTING NOW`);
