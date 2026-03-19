@@ -75,6 +75,13 @@ export default function FacultyDashboard() {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  const [consultationAlert, setConsultationAlert] = useState<{
+    consultation_id: number;
+    student_name: string;
+    time_slot: string;
+    meet_link: string;
+    minutes_until_start: number;
+  } | null>(null);
   const sessionWindowRef = useRef<Window | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
@@ -90,22 +97,23 @@ export default function FacultyDashboard() {
   const playNotificationSound = (data: any) => {
     // Create audio context for notification sound
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const bufferLength = audioContext.sampleRate * 2; // 2 seconds
+    const bufferLength = audioContext.sampleRate * 2.5; // 2.5 seconds
     const buffer = audioContext.createBuffer(1, bufferLength, audioContext.sampleRate);
     const data_array = buffer.getChannelData(0);
 
-    // Generate beep pattern: 3 short beeps
-    const beepDuration = audioContext.sampleRate * 0.2; // 200ms per beep
-    const silence = audioContext.sampleRate * 0.1; // 100ms silence
+    // Generate alarm pattern: ascending chirps with longer beeps
+    const beepDuration = audioContext.sampleRate * 0.15; // 150ms per beep
+    const silence = audioContext.sampleRate * 0.05; // 50ms silence
 
     let pos = 0;
-    const freq = 1000; // 1000Hz frequency
+    const frequencies = [800, 1000, 1200, 1000]; // Ascending tones
 
-    // Generate 3 beeps
-    for (let i = 0; i < 3; i++) {
+    // Generate 4 chirps with increasing frequency then back down
+    for (let i = 0; i < frequencies.length; i++) {
+      const freq = frequencies[i];
       // Beep sound
       for (let j = 0; j < beepDuration; j++) {
-        data_array[pos++] = Math.sin((2 * Math.PI * freq * j) / audioContext.sampleRate) * 0.3;
+        data_array[pos++] = Math.sin((2 * Math.PI * freq * j) / audioContext.sampleRate) * 0.4;
       }
       // Silence
       for (let j = 0; j < silence; j++) {
@@ -119,7 +127,6 @@ export default function FacultyDashboard() {
     source.connect(audioContext.destination);
     source.start(0);
 
-    // Show visual notification
     console.log("🔔 Consultation starting notification!");
     console.log(
       `   Student: ${data.student_name}`,
@@ -127,13 +134,17 @@ export default function FacultyDashboard() {
       `\n   In ${data.minutes_until_start} minutes`
     );
 
-    // Optional: Show browser notification if permission granted
+    // Show browser notification if permission granted
     if ("Notification" in window && Notification.permission === "granted") {
-      new Notification("Consultation Starting Soon", {
-        body: `${data.student_name} - ${data.time_slot}`,
+      const notification = new Notification("🔔 Consultation Starting Soon!", {
+        body: `${data.student_name} - ${data.time_slot}\nJoining in ${data.minutes_until_start} minutes`,
         tag: `consultation-${data.consultation_id}`,
-        requireInteraction: true
+        requireInteraction: true,
+        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%234F46E5'/><text x='50' y='65' font-size='60' fill='white' text-anchor='middle'>🔔</text></svg>"
       });
+      
+      // Auto-close after 10 seconds
+      setTimeout(() => notification.close(), 10000);
     }
   };
 
@@ -185,6 +196,14 @@ export default function FacultyDashboard() {
           }
           if (data.type === "consultation_starting_soon" && data.faculty_id === selectedFaculty) {
             console.log("📢 Consultation starting soon notification:", data);
+            // Show modal alert
+            setConsultationAlert({
+              consultation_id: data.consultation_id,
+              student_name: data.student_name,
+              time_slot: data.time_slot,
+              meet_link: data.meet_link,
+              minutes_until_start: data.minutes_until_start
+            });
             // Play notification sound
             playNotificationSound(data);
           }
@@ -1014,6 +1033,58 @@ export default function FacultyDashboard() {
 
   return (
     <div className="min-h-[100dvh] bg-neutral-100 flex flex-col">
+      {/* Consultation Alert Modal */}
+      {consultationAlert && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in slide-in-from-bottom-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full space-y-6 animate-in scale-95">
+            {/* Alert Header */}
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-14 h-14 bg-red-100 rounded-full flex items-center justify-center animate-pulse">
+                <span className="text-2xl">🔔</span>
+              </div>
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-neutral-900">Consultation Starting!</h2>
+                <p className="text-sm text-neutral-600 mt-1">Student arriving in {consultationAlert.minutes_until_start} minutes</p>
+              </div>
+            </div>
+
+            {/* Alert Content */}
+            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 rounded-2xl p-5 space-y-4">
+              <div>
+                <p className="text-sm font-medium text-indigo-900">Student Name</p>
+                <p className="text-lg font-bold text-indigo-900 mt-1">{consultationAlert.student_name}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-indigo-900">Time Slot</p>
+                <p className="text-lg font-bold text-indigo-900 mt-1">{consultationAlert.time_slot}</p>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setConsultationAlert(null);
+                }}
+                className="flex-1 px-4 py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-900 font-bold rounded-xl transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  if (consultationAlert.meet_link) {
+                    window.open(consultationAlert.meet_link, '_blank');
+                  }
+                  setConsultationAlert(null);
+                }}
+                className="flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-colors shadow-lg"
+              >
+                Join Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="shrink-0 bg-white shadow-sm p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-start">
           <div className="flex items-center gap-3">

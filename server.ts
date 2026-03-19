@@ -2759,7 +2759,7 @@ async function startServer() {
           <p>Hi ${formatted.student_name || 'Student'},</p>
           <p>You have successfully joined the queue for a consultation with <strong>${formatted.faculty_name || 'your selected faculty'}</strong>.</p>
           ${time_period ? `<p><strong>Time Slot:</strong> ${time_period}</p>` : ''}
-          <p><strong>Virtual Consultation Room:</strong> You will receive the Google Meet link via email 5 minutes before your consultation starts.</p>
+          <p><strong>Virtual Consultation Room:</strong> You will receive the Google Meet link via email when your consultation time arrives.</p>
           <p>Please keep this email. You can track your status on the kiosk or wait for further notifications.</p>
           <br/>
           <p>Thank you!</p>
@@ -3239,7 +3239,7 @@ async function startServer() {
 
       console.log(`✅ Queue Status Updated - ID: ${consultationId}, Status: ${status}`);
 
-      // Note: Email reminders are now sent by the background scheduler 5 minutes before consultation time
+      // Note: Email reminders are sent by the background scheduler at consultation start time
       // This endpoint is only responsible for status updates
 
       await logAudit("consultation_status_updated", { 
@@ -5159,9 +5159,10 @@ async function startServer() {
   });
 
   // ==========================================
-  // SCHEDULER: Send email 5 minutes before consultation
+  // SCHEDULER: Send notification at 5-7 mins (student email) and at consultation time (all)
   // ==========================================
-  const sentReminderEmails = new Set<string>(); // Track which consultations already got reminder emails
+  const sentAdvanceEmails = new Set<string>(); // Track 5-7 minute student advance emails
+  const sentOnTimeNotifications = new Set<string>(); // Track on-time emails/broadcasts
 
   const scheduleConsultationReminders = () => {
     const sendReminderEmails = async () => {
@@ -5190,10 +5191,6 @@ async function startServer() {
         console.log(`📋 [SCHEDULER] Found ${waitingConsultations.length} waiting consultations`);
 
         for (const consultation of waitingConsultations) {
-          // Skip if we already sent a reminder for this consultation
-          if (sentReminderEmails.has(consultation.id)) {
-            continue;
-          }
 
           const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
           const studentName = (consultation as any)?.students?.full_name || "Student";
@@ -5292,32 +5289,62 @@ async function startServer() {
           console.log(`   Start time: ${startHour}:${String(startMin).padStart(2, '0')} (${consultationStartMinutes} minutes)`);
           console.log(`   Minutes until start: ${minutesUntilStart}`);
 
-          // Send email if consultation starts within next 5-7 minutes (window to account for scheduler timing)
-          if (minutesUntilStart > 0 && minutesUntilStart <= 7) {
-            console.log(`   ✅ SENDING EMAIL NOW!`);
-            try {
+          try {
+            // === ADVANCE EMAIL: Send to STUDENT ONLY at 5-7 minutes before ===
+            if (minutesUntilStart >= 5 && minutesUntilStart <= 7 && !sentAdvanceEmails.has(consultation.id)) {
+              console.log(`   ✅ SENDING 5-MINUTE ADVANCE EMAIL TO STUDENT`);
               if (studentEmail) {
-                console.log(`   📧 Sending to ${studentEmail}...`);
+                console.log(`   📧 Sending advance reminder to ${studentEmail}...`);
                 sendEmailNotification(
                   studentEmail,
-                  `Your consultation is starting in ${minutesUntilStart} minutes!`,
+                  `Consultation reminder - ${timePart}`,
                   `
                   <h2>Consultation Reminder</h2>
                   <p>Hi ${studentName},</p>
-                  <p><strong>Your consultation is starting in ${minutesUntilStart} minutes!</strong></p>
+                  <p><strong>Your consultation is in 5 minutes!</strong></p>
                   <p><strong>Time:</strong> ${timePart}</p>
-                  <p>Please be ready to join the meeting.</p>
+                  <p>Please prepare and get ready to join the meeting.</p>
                   <p><strong>Join here:</strong> <a href="${meetLink}">${meetLink}</a></p>
-                  <p>If you are not ready or need to reschedule, please contact the faculty immediately.</p>
                   `
                 );
+                sentAdvanceEmails.add(consultation.id);
+                console.log(`   ✅ Advance email queued for sending (via SendGrid)`);
 
-                // Mark as sent
-                sentReminderEmails.add(consultation.id);
-                console.log(`   ✅ Email queued for sending (via SendGrid)`);
+                // Log audit event for advance email
+                await logAudit("consultation_advance_reminder_email_sent", {
+                  consultation_id: consultation.id,
+                  student_id: consultation.student_id,
+                  student_email: studentEmail,
+                  faculty_id: facultyId,
+                  minutes_before_start: minutesUntilStart,
+                  scheduled_start_time: timePart,
+                  meet_link: meetLink
+                });
+              }
+            }
 
-                // Broadcast notification to faculty for this consultation
-                console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation starting`);
+            // === ON-TIME NOTIFICATION: Send to STUDENT & FACULTY at consultation start time ===
+            if (minutesUntilStart >= -1 && minutesUntilStart <= 1 && !sentOnTimeNotifications.has(consultation.id)) {
+              console.log(`   ✅ SENDING ON-TIME NOTIFICATION!`);
+              if (studentEmail) {
+                console.log(`   📧 Sending on-time email to ${studentEmail}...`);
+                sendEmailNotification(
+                  studentEmail,
+                  `Your consultation is NOW! Join here!`,
+                  `
+                  <h2>Your Consultation is Starting Now!</h2>
+                  <p>Hi ${studentName},</p>
+                  <p><strong>Your consultation is starting NOW!</strong></p>
+                  <p><strong>Time:</strong> ${timePart}</p>
+                  <p>Please join the meeting immediately.</p>
+                  <p><strong>Join here:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <p>If you have any issues, please contact the faculty right away.</p>
+                  `
+                );
+                console.log(`   ✅ On-time email queued for sending (via SendGrid)`);
+
+                // Broadcast notification to faculty for this consultation (FACULTY ONLY GETS THIS)
+                console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation STARTING NOW`);
                 broadcast("consultation_starting_soon", {
                   consultation_id: consultation.id,
                   faculty_id: facultyId,
@@ -5328,7 +5355,10 @@ async function startServer() {
                   meet_link: meetLink
                 });
 
-                // Log audit event
+                sentOnTimeNotifications.add(consultation.id);
+                console.log(`   ✅ On-time email & faculty broadcast sent`);
+
+                // Log audit event for on-time notification
                 await logAudit("consultation_reminder_email_sent", {
                   consultation_id: consultation.id,
                   student_id: consultation.student_id,
@@ -5341,13 +5371,15 @@ async function startServer() {
               } else {
                 console.log(`   ⏭️ No student email to send to`);
               }
-            } catch (emailErr) {
-              console.error(`   ❌ Email error:`, emailErr instanceof Error ? emailErr.message : String(emailErr));
+            } else if (minutesUntilStart <= 0) {
+              console.log(`   ⏭️ Consultation already started (or in past)`);
+            } else if (minutesUntilStart < 5) {
+              console.log(`   ⏭️ Not yet in 5-minute advance window (${minutesUntilStart} minutes away)`);
+            } else {
+              console.log(`   ⏭️ Not yet in advance window (${minutesUntilStart} minutes away)`);
             }
-          } else if (minutesUntilStart <= 0) {
-            console.log(`   ⏭️ Consultation already started (or in past)`);
-          } else {
-            console.log(`   ⏭️ Not yet in 5-minute window (${minutesUntilStart} minutes away)`);
+          } catch (emailErr) {
+            console.error(`   ❌ Error:`, emailErr instanceof Error ? emailErr.message : String(emailErr));
           }
         }
       } catch (err) {
@@ -5358,13 +5390,14 @@ async function startServer() {
     // Run immediately on server start
     sendReminderEmails();
 
-    // Then run every 30 seconds to catch the 5-minute window
+    // Then run every 30 seconds to catch both 5-minute advance and on-time windows
     const intervalId = setInterval(() => {
       sendReminderEmails();
     }, 30 * 1000); // 30 seconds
 
-    console.log("📬 Consultation reminder email scheduler started (checks every 30 seconds)");
-    console.log("   ✅ Sends email 5 minutes before ANY waiting consultation");
+    console.log("📬 Consultation notification scheduler started (checks every 30 seconds)");
+    console.log("   📧 Sends ADVANCE email to STUDENTS at 5-7 minutes before");
+    console.log("   🔔 Sends ON-TIME alert to FACULTY at consultation start time (±1 minute window)");
 
     // Make sure interval is cleaned up on process exit
     process.on("exit", () => clearInterval(intervalId));
