@@ -211,7 +211,7 @@ export default function StudentTracking() {
               </div>
               <h2 className="text-3xl font-black text-red-900 mb-2">Cancelled</h2>
               <p className="text-red-700/70 text-center max-w-[250px]">
-                Your consultation was cancelled. Please try again later.
+                You've cancelled your consultation successfully. 
               </p>
             </div>
           )}
