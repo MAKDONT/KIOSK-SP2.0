@@ -194,18 +194,18 @@ export default function FacultyDashboard() {
           if (data.type === "faculty_updated") {
             fetchFaculty();
           }
-          if (data.type === "consultation_starting_soon" && data.faculty_id === selectedFaculty) {
-            console.log("📢 Consultation starting soon notification:", data);
+          if (data.type === "consultation_starting_soon" && data.payload.faculty_id === selectedFaculty) {
+            console.log("📢 Consultation starting soon notification:", data.payload);
             // Show modal alert
             setConsultationAlert({
-              consultation_id: data.consultation_id,
-              student_name: data.student_name,
-              time_slot: data.time_slot,
-              meet_link: data.meet_link,
-              minutes_until_start: data.minutes_until_start
+              consultation_id: data.payload.consultation_id,
+              student_name: data.payload.student_name,
+              time_slot: data.payload.time_slot,
+              meet_link: data.payload.meet_link,
+              minutes_until_start: data.payload.minutes_until_start
             });
             // Play notification sound
-            playNotificationSound(data);
+            playNotificationSound(data.payload);
           }
         } catch (err) {
           console.error("Faculty WS message parse error", err);
@@ -1060,26 +1060,15 @@ export default function FacultyDashboard() {
               </div>
             </div>
 
-            {/* Action Buttons */}
+            {/* Dismiss Button */}
             <div className="flex gap-3 pt-2">
               <button
                 onClick={() => {
                   setConsultationAlert(null);
                 }}
-                className="flex-1 px-4 py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-900 font-bold rounded-xl transition-colors"
+                className="w-full px-4 py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-900 font-bold rounded-xl transition-colors"
               >
                 Dismiss
-              </button>
-              <button
-                onClick={() => {
-                  if (consultationAlert.meet_link) {
-                    window.open(consultationAlert.meet_link, '_blank');
-                  }
-                  setConsultationAlert(null);
-                }}
-                className="flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-colors shadow-lg"
-              >
-                Join Now
               </button>
             </div>
           </div>

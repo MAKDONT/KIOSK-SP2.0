@@ -3348,7 +3348,7 @@ async function startServer() {
       // Send notification email to student if email exists
       const { data: student } = await getSupabase()
         .from("students")
-        .select("email")
+        .select("email, full_name")
         .eq("id", consultation.student_id)
         .single();
 
@@ -3359,12 +3359,14 @@ async function startServer() {
           .eq("id", consultation.faculty_id)
           .single();
 
+        const studentName = student.full_name || consultation.student_name || "Student";
+
         sendEmailNotification(
           student.email,
           "Consultation Cancelled",
           `
           <h2>Cancellation Confirmation</h2>
-          <p>Hi ${consultation.student_name || "Student"},</p>
+          <p>Hi ${studentName},</p>
           <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> has been cancelled.</p>
           <p>If you wish to schedule another consultation, please visit the kiosk or web application.</p>
           <br/>
@@ -5164,6 +5166,21 @@ async function startServer() {
   const sentAdvanceEmails = new Set<string>(); // Track 5-7 minute student advance emails
   const sentOnTimeNotifications = new Set<string>(); // Track on-time emails/broadcasts
 
+  // Helper to get current time in app timezone
+  const getCurrentAppTime = () => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: APP_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(new Date());
+    const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+    const minute = parseInt(parts.find(p => p.type === "minute")?.value || "0", 10);
+    return { hour, minute };
+  };
+
   const scheduleConsultationReminders = () => {
     const sendReminderEmails = async () => {
       try {
@@ -5182,9 +5199,8 @@ async function startServer() {
           return; // No consultations to process
         }
 
-        const now = new Date();
-        const currentHours = now.getHours();
-        const currentMinutes = now.getMinutes();
+        // Get current time in APP TIMEZONE (not server local time!)
+        const { hour: currentHours, minute: currentMinutes } = getCurrentAppTime();
         const currentTotalMinutes = currentHours * 60 + currentMinutes;
         
         console.log(`⏰ [SCHEDULER] Current time: ${currentHours}:${String(currentMinutes).padStart(2, '0')} (${currentTotalMinutes} minutes)`);
