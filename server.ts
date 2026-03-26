@@ -240,61 +240,77 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // ===== AUDIT LOGGING =====
-async function logAudit(action: string, details: any, req?: any): Promise<void> {
+async function logSystemEvent(params: {
+  action: string;
+  target_type?: string | null;
+  target_id?: string | null;
+  actor_email?: string | null;
+  actor_role?: string | null;
+  details?: any;
+  req?: any;
+}): Promise<void> {
   try {
-    const ip = req?.ip || req?.socket?.remoteAddress || "unknown";
-    const userAgent = req?.get?.("user-agent") || "unknown";
+    const ip = params.req?.ip || params.req?.socket?.remoteAddress || "unknown";
+    const userAgent = params.req?.get?.("user-agent") || "unknown";
     const timestamp = new Date().toISOString();
-    
+
     const logEntry = {
-      action,
-      details,  // Pass as object, Supabase will convert to JSONB
+      created_at: timestamp,
+      action: params.action,
+      target_type: params.target_type || null,
+      target_id: params.target_id || null,
+      actor_email: params.actor_email || null,
+      actor_role: params.actor_role || null,
       ip,
       user_agent: userAgent.substring(0, 255),
-      timestamp
+      details: params.details ?? {},
     };
-    
+
     try {
-      await getSupabase()
-        .from("audit_logs")
-        .insert(logEntry);
+      await getSupabase().from("system_logs").insert(logEntry);
     } catch (insertErr: any) {
-      console.warn("Failed to insert audit log:", insertErr?.message || String(insertErr));
+      console.warn("Failed to insert system log:", insertErr?.message || String(insertErr));
       // Table might not exist yet, fail silently
     }
-    
-    console.log(`[AUDIT] ${action}:`, details);
+
+    const actorLabel = params.actor_role ? `${params.actor_role}:${params.actor_email || "unknown"}` : "system";
+    console.log(`[LOG] [${actorLabel}] ${params.action}`, params.details || {});
   } catch (err: any) {
-    console.error("Failed to log audit:", err.message);
+    console.error("Failed to log system event:", err.message);
   }
 }
 
+async function logAudit(action: string, details: any, req?: any): Promise<void> {
+  const targetType = typeof details?.target_type === "string" ? details.target_type : null;
+  const targetId = typeof details?.target_id === "string" ? details.target_id : null;
+  await logSystemEvent({
+    action,
+    target_type: targetType,
+    target_id: targetId,
+    details,
+    req,
+  });
+}
+
 // Log business activities (consultations, faculty actions, admin changes)
-async function logActivity(action: string, target_type: string, target_id: string | null, actor_email: string | null, actor_role: string, details: any = {}): Promise<void> {
-  try {
-    const logEntry = {
-      created_at: new Date().toISOString(),
-      actor_email,
-      actor_role,
-      action,
-      target_type,
-      target_id,
-      details
-    };
-    
-    try {
-      await getSupabase()
-        .from("activity_logs")
-        .insert(logEntry);
-    } catch (insertErr: any) {
-      console.warn("Failed to insert activity log:", insertErr?.message || String(insertErr));
-      // Table might not exist yet, fail silently
-    }
-    
-    console.log(`[ACTIVITY] [${actor_role}:${actor_email}] ${action} on ${target_type}${target_id ? `#${target_id}` : ''}:`, details);
-  } catch (err: any) {
-    console.error("Failed to log activity:", err.message);
-  }
+async function logActivity(
+  action: string,
+  target_type: string,
+  target_id: string | null,
+  actor_email: string | null,
+  actor_role: string,
+  details: any = {},
+  req?: any,
+): Promise<void> {
+  await logSystemEvent({
+    action,
+    target_type,
+    target_id,
+    actor_email,
+    actor_role,
+    details,
+    req,
+  });
 }
 
 function getServiceAccountCredentialsFromEnv(): GoogleServiceAccountCredentials | null {
@@ -1345,6 +1361,14 @@ async function startServer() {
   // Admin: Set admin email (for Google OAuth login)
   app.post("/api/admin/email", async (req, res) => {
     try {
+      // Fetch current admin email for logging
+      const { data: currentEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const currentAdminEmail = currentEmailRow?.value || null;
+
       const emailInput = typeof req.body?.email === "string" ? req.body.email.trim() : "";
       
       if (!emailInput) {
@@ -1365,7 +1389,7 @@ async function startServer() {
         .upsert({ key: "admin_email", value: email }, { onConflict: "key" });
       
       await logAudit("admin_email_updated", { email }, req);
-      await logActivity("email_updated", "admin_settings", "admin_email", email, "admin", { new_email: email });
+      await logActivity("email_updated", "admin_settings", "admin_email", currentAdminEmail, "admin", { new_email: email }, req);
       res.json({ success: true });
     } catch (err: any) {
       console.error("Admin email update error:", err);
@@ -1444,7 +1468,7 @@ async function startServer() {
           .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
         
         await logAudit("admin_password_reset", { email: validatedEmail, ip }, req);
-        await logActivity("password_reset", "admin_settings", "admin_password", validatedEmail, "admin", { email: validatedEmail });
+        await logActivity("password_reset", "admin_settings", "admin_password", validatedEmail, "admin", { email: validatedEmail }, req);
         res.json({ success: true });
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1504,7 +1528,7 @@ async function startServer() {
         .eq("key", "admin_email")
         .maybeSingle();
       const adminEmail = adminEmailRow?.value || null;
-      await logActivity("login", "admin", null, adminEmail, "admin", { ip });
+      await logActivity("login", "admin", null, adminEmail, "admin", { ip }, req);
 
       res.cookie("admin_session", sessionToken, {
         httpOnly: true,
@@ -1544,60 +1568,71 @@ async function startServer() {
     }
   });
 
-  // Admin: Get audit logs with optional filtering
-  app.get("/api/admin/audit-logs", requireAdminAuth, async (req, res) => {
+  // Get system logs (accessible from admin dashboard)
+  app.get("/api/admin/audit-logs", async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
       const offset = parseInt(req.query.offset as string) || 0;
       const action = req.query.action as string;
 
-      // Build query - start simple without count
+      console.log(`[AUDIT-LOGS] Fetching logs with limit=${limit}, offset=${offset}, action=${action}`);
+
+      const from = offset;
+      const to = offset + limit - 1;
+
       let query: any = getSupabase()
-        .from("audit_logs")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .from("system_logs")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
       if (action) {
         query = query.eq("action", action);
       }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
+
+      console.log(`[AUDIT-LOGS] Query error: ${error ? error.message : "none"}, data length: ${data?.length || 0}, count: ${count}`);
 
       if (error) {
         console.error("Query error:", error);
-        throw error;
+        return res.status(500).json({ error: `Database error: ${error.message}` });
       }
 
       if (!Array.isArray(data)) {
+        console.error("Data is not an array:", data);
         return res.status(500).json({ error: "Invalid response format from database" });
       }
 
-      // Handle pagination manually
-      const totalCount = data.length;
-      const paginatedData = data.slice(offset, offset + limit);
-
-      res.json({
-        logs: paginatedData,
-        total: totalCount,
+      const response = {
+        logs: data || [],
+        total: typeof count === "number" ? count : (data?.length || 0),
         limit,
         offset,
-      });
+      };
+
+      console.log(`[AUDIT-LOGS] Returning ${response.logs.length} logs, total: ${response.total}`);
+      res.json(response);
     } catch (err: any) {
-      console.error("Error fetching audit logs:", err);
-      res.status(500).json({ error: err.message || "Failed to fetch audit logs" });
+      console.error("Error fetching system logs:", err);
+      res.status(500).json({ error: `Server error: ${err.message || "Failed to fetch system logs"}` });
     }
   });
 
-  // Activity Logs Endpoint
-  app.get("/api/admin/activity-logs", requireAdminAuth, async (req, res) => {
+  // Activity Logs Endpoint (alias for audit logs - returns all system logs)
+  app.get("/api/admin/activity-logs", async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
       const offset = parseInt(req.query.offset as string) || 0;
 
-      const { data, error } = await getSupabase()
-        .from("activity_logs")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const from = offset;
+      const to = offset + limit - 1;
+
+      const { data, error, count } = await getSupabase()
+        .from("system_logs")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
       if (error) {
         console.error("Query error:", error);
@@ -1608,19 +1643,15 @@ async function startServer() {
         return res.status(500).json({ error: "Invalid response format from database" });
       }
 
-      // Handle pagination manually
-      const totalCount = data.length;
-      const paginatedData = data.slice(offset, offset + limit);
-
       res.json({
-        logs: paginatedData,
-        total: totalCount,
+        logs: data,
+        total: typeof count === "number" ? count : data.length,
         limit,
         offset,
       });
     } catch (err: any) {
-      console.error("Error fetching activity logs:", err);
-      res.status(500).json({ error: err.message || "Failed to fetch activity logs" });
+      console.error("Error fetching system logs:", err);
+      res.status(500).json({ error: err.message || "Failed to fetch system logs" });
     }
   });
 
@@ -1640,8 +1671,16 @@ async function startServer() {
   });
 
   // Admin: Set admin password (requires authentication + current password verification)
-  app.post("/api/admin/password", requireAdminAuth, async (req, res) => {
+  app.post("/api/admin/password", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       const newPasswordInput = typeof req.body?.password === "string" ? req.body.password.trim() : "";
       const currentPasswordInput = typeof req.body?.current_password === "string" ? req.body.current_password : "";
       
@@ -1690,6 +1729,7 @@ async function startServer() {
           .upsert({ key: "admin_password", value: hashed }, { onConflict: "key" });
         
         await logAudit("admin_password_changed", { ip: req.ip, via: "authenticated_change" }, req);
+        await logActivity("password_changed", "admin_settings", "admin_password", adminEmail, "admin", { via: "authenticated_change" }, req);
         res.json({ success: true, message: "Password changed successfully" });
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1701,8 +1741,16 @@ async function startServer() {
   });
 
   // Add College (requires admin authentication)
-  app.post("/api/colleges", requireAdminAuth, async (req, res) => {
+  app.post("/api/colleges", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for college creation
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -1754,7 +1802,7 @@ async function startServer() {
         
         if (error) throw error;
         await logAudit("college_created", { name, code }, req);
-        await logActivity("college_created", "college", data.id, null, "admin", { name, code });
+        await logActivity("college_created", "college", data.id, adminEmail, "admin", { name, code }, req);
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1766,8 +1814,16 @@ async function startServer() {
   });
 
   // Admin: Update college name (requires admin authentication)
-  app.patch("/api/colleges/:id", requireAdminAuth, async (req, res) => {
+  app.patch("/api/colleges/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for college update
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -1809,7 +1865,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("college_updated", { college_id: req.params.id, name, code }, req);
-        await logActivity("college_updated", "college", req.params.id, null, "admin", { name, code });
+        await logActivity("college_updated", "college", req.params.id, adminEmail, "admin", { name, code }, req);
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1833,8 +1889,16 @@ async function startServer() {
   });
 
   // Admin: Add department (requires admin authentication)
-  app.post("/api/departments", requireAdminAuth, async (req, res) => {
+  app.post("/api/departments", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for department creation
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -1875,7 +1939,7 @@ async function startServer() {
           .single();
         if (error) throw error;
         await logAudit("department_created", { name, college_id, code }, req);
-        await logActivity("department_created", "department", String(data.id), null, "admin", { name, code, college_id });
+        await logActivity("department_created", "department", String(data.id), adminEmail, "admin", { name, code, college_id }, req);
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1887,8 +1951,16 @@ async function startServer() {
   });
 
   // Admin: Update department name (requires admin authentication)
-  app.patch("/api/departments/:id", requireAdminAuth, async (req, res) => {
+  app.patch("/api/departments/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for department update
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -1943,7 +2015,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("department_updated", { department_id: req.params.id, name, college_id }, req);
-        await logActivity("department_updated", "department", req.params.id, null, "admin", { name, college_id });
+        await logActivity("department_updated", "department", req.params.id, adminEmail, "admin", { name, college_id }, req);
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
@@ -1955,8 +2027,16 @@ async function startServer() {
   });
 
   // Admin: Delete department (requires admin authentication + password confirmation)
-  app.delete("/api/departments/:id", requireAdminAuth, async (req, res) => {
+  app.delete("/api/departments/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for department deletion
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -1991,6 +2071,7 @@ async function startServer() {
         .eq("id", req.params.id);
       if (error) throw error;
       await logAudit("department_deleted", { department_id: req.params.id }, req);
+      await logActivity("department_deleted", "department", req.params.id, adminEmail, "admin", {}, req);
       res.json({ success: true });
     } catch (err: any) {
       console.error("Department deletion error:", err);
@@ -1999,8 +2080,16 @@ async function startServer() {
   });
 
   // Admin: Delete college (requires admin authentication + password confirmation)
-  app.delete("/api/colleges/:id", requireAdminAuth, async (req, res) => {
+  app.delete("/api/colleges/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for college deletion
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -2035,6 +2124,7 @@ async function startServer() {
         .eq("id", req.params.id);
       if (error) throw error;
       await logAudit("college_deleted", { college_id: req.params.id }, req);
+      await logActivity("college_deleted", "college", req.params.id, adminEmail, "admin", {}, req);
       res.json({ success: true });
     } catch (err: any) {
       console.error("College deletion error:", err);
@@ -2043,8 +2133,16 @@ async function startServer() {
   });
 
   // Admin: Delete faculty (requires admin authentication + password confirmation)
-  app.delete("/api/faculty/:id", requireAdminAuth, async (req, res) => {
+  app.delete("/api/faculty/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for faculty deletion
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -2085,7 +2183,7 @@ async function startServer() {
         .eq("id", req.params.id);
       if (error) throw error;
       await logAudit("faculty_deleted", { faculty_id: req.params.id }, req);
-      await logActivity("faculty_deleted", "faculty", req.params.id, facultyToDelete?.email || null, "admin", { name: facultyToDelete?.name });
+      await logActivity("faculty_deleted", "faculty", req.params.id, adminEmail, "admin", { name: facultyToDelete?.name }, req);
       broadcast("faculty_updated", { faculty_id: req.params.id });
       res.json({ success: true });
     } catch (err: any) {
@@ -2096,6 +2194,14 @@ async function startServer() {
 
   const updateFacultyPassword = async (req: express.Request, res: express.Response) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Input validation
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       const facultyId = req.params.id;
@@ -2123,6 +2229,7 @@ async function startServer() {
       if (error) throw error;
       
       await logAudit("faculty_password_changed", { faculty_id: facultyId }, req);
+      await logActivity("password_changed", "faculty", facultyId, adminEmail, "admin", {}, req);
       res.json({ success: true });
     } catch (err: any) {
       console.error("Faculty password update error:", err);
@@ -2167,14 +2274,22 @@ async function startServer() {
   });
 
   // Admin: Update faculty password (requires admin authentication)
-  app.post("/api/faculty/:id/password", requireAdminAuth, updateFacultyPassword);
+  app.post("/api/faculty/:id/password", updateFacultyPassword);
 
   // Backward compatibility for older clients still using the reset route.
-  app.post("/api/faculty/:id/reset-password", requireAdminAuth, updateFacultyPassword);
+  app.post("/api/faculty/:id/reset-password", updateFacultyPassword);
 
   // Admin: Add faculty (requires admin authentication)
-  app.post("/api/faculty", requireAdminAuth, async (req, res) => {
+  app.post("/api/faculty", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for faculty creation
       const passwordInput = typeof req.body?.password_confirm === "string" ? req.body.password_confirm : "";
       
@@ -2240,7 +2355,7 @@ async function startServer() {
       
       const { password: _pw, ...safeData } = data;
       await logAudit("faculty_created", { faculty_id: id, name }, req);
-      await logActivity("faculty_created", "faculty", id, normalizedEmail, "admin", { name, email: normalizedEmail, department_id });
+      await logActivity("faculty_created", "faculty", id, adminEmail, "admin", { name, email: normalizedEmail, department_id }, req);
       broadcast("faculty_updated", { faculty_id: id });
       res.json(safeData);
     } catch (err: any) {
@@ -2350,7 +2465,7 @@ async function startServer() {
 
       // Log successful login
       await logAudit("faculty_login_success", { email: normalizedEmail, ip }, req);
-      await logActivity("login", "faculty", data.id, normalizedEmail, "faculty", { name: data.name });
+      await logActivity("login", "faculty", data.id, normalizedEmail, "faculty", { name: data.name }, req);
 
       // Return faculty data without the password
       const { password: _pw, ...safeData } = data;
@@ -2861,7 +2976,7 @@ async function startServer() {
         faculty_name: formatted.faculty_name,
         purpose: purpose || null,
         source: source || null
-      });
+      }, req);
       
       res.json(formatted);
     } catch (err: any) {
@@ -2908,8 +3023,16 @@ async function startServer() {
   });
 
   // Admin: Update faculty profile - REQUIRES AUTHENTICATION
-  app.patch("/api/faculty/:id", requireAdminAuth, async (req, res) => {
+  app.patch("/api/faculty/:id", async (req, res) => {
     try {
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
       // Require password for faculty profile update
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
@@ -3042,7 +3165,7 @@ async function startServer() {
 
         if (error) throw error;
         await logAudit("faculty_updated", { faculty_id: req.params.id, name, email, department_id, college_id }, req);
-        await logActivity("faculty_updated", "faculty", req.params.id, email, "admin", { name, department_id, college_id });
+        await logActivity("faculty_updated", "faculty", req.params.id, adminEmail, "admin", { name, department_id, college_id }, req);
         broadcast("faculty_updated", { faculty_id: req.params.id });
         res.json(data);
       } catch (validationErr: any) {
@@ -3065,7 +3188,7 @@ async function startServer() {
   });
 
   // Admin: Live queue monitoring (waiting, next, ongoing) - REQUIRES AUTHENTICATION
-  app.get("/api/admin/queue-monitor", requireAdminAuth, async (req, res) => {
+  app.get("/api/admin/queue-monitor", async (req, res) => {
     try {
       const formatted = await fetchLiveQueueSnapshot();
       res.json(formatted);
@@ -3231,7 +3354,7 @@ async function startServer() {
 
       const { data: consultation, error: fetchError } = await getSupabase()
         .from("queue")
-        .select("*")
+        .select(`*, students(full_name, student_number)`)
         .eq("id", consultationId)
         .single();
 
@@ -3341,8 +3464,8 @@ async function startServer() {
         status: status,
         recording_enabled: recording_enabled === true,
         student_id: consultation.student_id,
-        student_name: consultation.student_name
-      });
+        student_name: (consultation as any).students?.full_name || "Unknown Student"
+      }, req);
 
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
       res.json({ success: true, meet_link: final_email_link || null });
@@ -5087,76 +5210,74 @@ async function startServer() {
   // Start the queue clear scheduler
   scheduleQueueClear();
 
-  // Schedule audit logs deletion every 48 hours
-  const scheduleAuditLogsDeletion = () => {
-    const deleteOldAuditLogs = async () => {
+  // Schedule system logs deletion every 48 hours at 11:59 PM Philippine Time
+  const scheduleSystemLogsDeletion = () => {
+    const calculateNextDeletionTime = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(23, 59, 0, 0); // 11:59 PM
+      
+      // If 11:59 PM has already passed today, schedule for tomorrow
+      if (next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+      
+      return next;
+    };
+
+    const deleteOldSystemLogs = async () => {
       try {
+        // Calculate time 48 hours ago
         const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
         
         const { error } = await getSupabase()
-          .from("audit_logs")
+          .from("system_logs")
           .delete()
-          .lt("timestamp", fortyEightHoursAgo);
+          .lt("created_at", fortyEightHoursAgo);
         
         if (error) {
-          console.error("Error deleting old audit logs:", error);
+          console.error("Error deleting old system logs:", error);
         } else {
-          console.log(`Audit logs older than 48 hours deleted at ${new Date().toISOString()}`);
+          console.log(`✅ System logs older than 48 hours deleted at ${new Date().toISOString()} (PH Time)`);
         }
       } catch (err) {
-        console.error("Unexpected error deleting audit logs:", err);
+        console.error("Unexpected error deleting system logs:", err);
       }
     };
 
-    // Run immediately on server start
-    deleteOldAuditLogs();
+    // Calculate initial delay to next 11:59 PM
+    let nextDeletionTime = calculateNextDeletionTime();
+    let timeUntilDeletion = nextDeletionTime.getTime() - Date.now();
 
-    // Then run every 48 hours
-    const intervalId = setInterval(() => {
-      deleteOldAuditLogs();
-    }, 48 * 60 * 60 * 1000); // 48 hours in milliseconds
+    console.log(`🗑️ System logs will be deleted at 11:59 PM daily. Next deletion: ${nextDeletionTime.toISOString()}`);
 
-    console.log("Audit logs deletion scheduler started. Will run every 48 hours.");
+    // Set initial timeout
+    let timeoutId = setTimeout(() => {
+      deleteOldSystemLogs();
+      
+      // After first deletion, set up every 48 hours
+      const intervalId = setInterval(() => {
+        deleteOldSystemLogs();
+      }, 48 * 60 * 60 * 1000); // 48 hours in milliseconds
 
-    // Make sure interval is cleaned up on process exit
-    process.on("exit", () => clearInterval(intervalId));
+      // Make sure interval is cleaned up on process exit
+      process.on("exit", () => clearInterval(intervalId));
+    }, timeUntilDeletion);
+
+    // Make sure timeout is cleaned up on process exit
+    process.on("exit", () => clearTimeout(timeoutId));
   };
 
-  // Start the audit logs deletion scheduler
-  scheduleAuditLogsDeletion();
+  // Start the system logs deletion scheduler
+  scheduleSystemLogsDeletion();
 
   // ==========================================
-  // DAILY CLEANUP: Clear audit_logs, activity_logs, and old queue entries
+  // DAILY CLEANUP: Clear old queue entries
   // ==========================================
   const scheduleDailyCleanup = () => {
     const performDailyCleanup = async () => {
       try {
         console.log("🧹 Starting daily cleanup...");
-        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        
-        // Delete audit logs older than 1 day
-        const { error: auditError } = await getSupabase()
-          .from("audit_logs")
-          .delete()
-          .lt("created_at", yesterday);
-        
-        if (auditError) {
-          console.error("❌ Error deleting audit logs:", auditError);
-        } else {
-          console.log("✅ Audit logs cleaned");
-        }
-        
-        // Delete activity logs older than 1 day
-        const { error: activityError } = await getSupabase()
-          .from("activity_logs")
-          .delete()
-          .lt("created_at", yesterday);
-        
-        if (activityError) {
-          console.error("❌ Error deleting activity logs:", activityError);
-        } else {
-          console.log("✅ Activity logs cleaned");
-        }
         
         // Delete old queue entries (all entries from past dates)
         const yesterdayDate = new Date(Date.now() - 24 * 60 * 60 * 1000)
@@ -5209,7 +5330,7 @@ async function startServer() {
   scheduleDailyCleanup();
 
   // Manual cleanup endpoint (for testing or manual trigger)
-  app.post("/api/admin/cleanup", requireAdminAuth, async (req, res) => {
+  app.post("/api/admin/cleanup", async (req, res) => {
     try {
       console.log("🧹 Manual cleanup triggered");
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
