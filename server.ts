@@ -2258,6 +2258,14 @@ async function startServer() {
         return res.status(400).json({ error: validationErr.message });
       }
 
+      // Fetch faculty email for logging
+      const { data: facultyData } = await getSupabase()
+        .from("faculty")
+        .select("email")
+        .eq("id", facultyId)
+        .maybeSingle();
+      const facultyEmail = facultyData?.email || null;
+
       const hashed = hashPassword(passwordInput);
       const { error } = await getSupabase()
         .from("faculty")
@@ -2266,6 +2274,7 @@ async function startServer() {
       if (error) throw error;
       
       await logAudit("faculty_self_password_changed", { faculty_id: facultyId }, req);
+      await logActivity("password_changed", "faculty", facultyId, facultyEmail, "faculty", {}, req);
       res.json({ success: true, message: "Password updated successfully" });
     } catch (err: any) {
       console.error("Faculty password update error:", err);
@@ -3354,7 +3363,7 @@ async function startServer() {
 
       const { data: consultation, error: fetchError } = await getSupabase()
         .from("queue")
-        .select(`*, students(full_name, student_number)`)
+        .select(`*, students(full_name, student_number), faculty(email)`)
         .eq("id", consultationId)
         .single();
 
@@ -3460,7 +3469,8 @@ async function startServer() {
       // Log consultation status change as activity
       const actionMap = { "serving": "consultation_started", "completed": "consultation_completed", "cancelled": "consultation_cancelled", "waiting": "consultation_waiting" };
       const activityAction = actionMap[status as keyof typeof actionMap] || `consultation_${status}`;
-      await logActivity(activityAction, "consultation", consultationId, null, "faculty", {
+      const facultyEmail = (consultation as any).faculty?.email || null;
+      await logActivity(activityAction, "consultation", consultationId, facultyEmail, "faculty", {
         status: status,
         recording_enabled: recording_enabled === true,
         student_id: consultation.student_id,
