@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS queue (
   student_id TEXT NOT NULL REFERENCES students(id),
   faculty_id TEXT NOT NULL REFERENCES faculty(id),
   status TEXT DEFAULT 'waiting', -- waiting, next, serving, completed, cancelled
+  queue_number TEXT,
+  position INTEGER,
   entry_time TIMESTAMPTZ DEFAULT NOW(),
   start_time TIMESTAMPTZ,
   end_time TIMESTAMPTZ,
@@ -64,8 +66,13 @@ CREATE TABLE IF NOT EXISTS queue (
   source TEXT, -- kiosk, web
   purpose TEXT,
   queue_date DATE DEFAULT CURRENT_DATE,
-  time_period TEXT
+  time_period TEXT,
+  student_email TEXT,
+  department_id BIGINT REFERENCES departments(id),
+  college_id UUID REFERENCES colleges(id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS queue_faculty_date_number_idx
+  ON queue (faculty_id, queue_date, queue_number);
 ALTER TABLE queue DISABLE ROW LEVEL SECURITY;
 
 -- 5. Insert some initial dummy data for testing (Optional)

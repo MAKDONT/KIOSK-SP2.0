@@ -1291,6 +1291,28 @@ async function startServer() {
     }
   }
 
+  // In-memory lock to serialize queue number assignment per faculty/day
+  const queueLocks = new Map<string, Promise<void>>();
+  const withQueueLock = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const previous = queueLocks.get(key) || Promise.resolve();
+    let release: (() => void) | null = null;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    queueLocks.set(key, previous.then(() => current));
+    await previous;
+
+    try {
+      return await fn();
+    } finally {
+      release?.();
+      if (queueLocks.get(key) === current) {
+        queueLocks.delete(key);
+      }
+    }
+  };
+
   // --- API Routes ---
 
   // Admin: Get all colleges (if exists)
@@ -2064,6 +2086,7 @@ async function startServer() {
       if (error) throw error;
       await logAudit("faculty_deleted", { faculty_id: req.params.id }, req);
       await logActivity("faculty_deleted", "faculty", req.params.id, facultyToDelete?.email || null, "admin", { name: facultyToDelete?.name });
+      broadcast("faculty_updated", { faculty_id: req.params.id });
       res.json({ success: true });
     } catch (err: any) {
       console.error("Faculty deletion error:", err);
@@ -2218,6 +2241,7 @@ async function startServer() {
       const { password: _pw, ...safeData } = data;
       await logAudit("faculty_created", { faculty_id: id, name }, req);
       await logActivity("faculty_created", "faculty", id, normalizedEmail, "admin", { name, email: normalizedEmail, department_id });
+      broadcast("faculty_updated", { faculty_id: id });
       res.json(safeData);
     } catch (err: any) {
       console.error("Faculty creation error:", err);
@@ -2370,6 +2394,7 @@ async function startServer() {
       if (error) throw error;
       
       await logAudit("faculty_availability_updated", { faculty_id: targetId }, req);
+      broadcast("faculty_updated", { faculty_id: targetId });
       res.json(data);
     } catch (err: any) {
       console.error("Faculty availability update error:", err);
@@ -2680,59 +2705,117 @@ async function startServer() {
         time_period: time_period || null,
         queue_date: today,
       };
+      const insertWithFallback = async (options: {
+        includeQueueNumber: boolean;
+        allowPurpose: boolean;
+        allowTimePeriod: boolean;
+        nextQueueNumber: string | null;
+        nextPosition: number | null;
+      }): Promise<any> => {
+        const payload: any = { ...queueInsertBase };
 
-      let { data: info, error } = await getSupabase()
-        .from("queue")
-        .insert({
-          ...queueInsertBase,
-          purpose: purpose || null,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        const message = String(error.message || "").toLowerCase();
-        const missingPurposeColumn =
-          message.includes("purpose") &&
-          (message.includes("schema cache") || message.includes("column"));
-
-        const missingTimePeriodColumn =
-          message.includes("time_period") &&
-          (message.includes("schema cache") || message.includes("column"));
-
-        if (missingPurposeColumn) {
-          console.warn("Queue insert fallback: 'purpose' column not found. Retrying without purpose.");
-          const retry = await getSupabase()
-            .from("queue")
-            .insert(queueInsertBase)
-            .select()
-            .single();
-          info = retry.data;
-          error = retry.error;
-        } else if (missingTimePeriodColumn) {
-          console.warn("Queue insert fallback: 'time_period' column not found. Retrying with meet_link only.");
-          const { student_id, faculty_id, status, student_email, meet_link } = queueInsertBase;
-          const retryBase = {
-            student_id,
-            faculty_id,
-            status,
-            student_email,
-            meet_link,
-          };
-          const retry = await getSupabase()
-            .from("queue")
-            .insert({
-              ...retryBase,
-              purpose: purpose || null,
-            })
-            .select()
-            .single();
-          info = retry.data;
-          error = retry.error;
+        if (!options.allowTimePeriod) {
+          delete payload.time_period;
         }
-      }
 
-      if (error) throw error;
+        if (options.includeQueueNumber && options.nextQueueNumber) {
+          payload.queue_number = options.nextQueueNumber;
+          if (options.nextPosition !== null) {
+            payload.position = options.nextPosition;
+          }
+        }
+
+        if (options.allowPurpose) {
+          payload.purpose = purpose || null;
+        }
+
+        let { data, error } = await getSupabase()
+          .from("queue")
+          .insert(payload)
+          .select()
+          .single();
+
+        if (error) {
+          const message = String(error.message || "").toLowerCase();
+          const missingPurposeColumn =
+            options.allowPurpose &&
+            message.includes("purpose") &&
+            (message.includes("schema cache") || message.includes("column"));
+
+          const missingTimePeriodColumn =
+            options.allowTimePeriod &&
+            message.includes("time_period") &&
+            (message.includes("schema cache") || message.includes("column"));
+
+          const missingQueueNumberColumn =
+            options.includeQueueNumber && message.includes("queue_number");
+
+          const missingPositionColumn =
+            options.includeQueueNumber && message.includes("position");
+
+          if (missingPurposeColumn) {
+            return insertWithFallback({ ...options, allowPurpose: false });
+          }
+
+          if (missingTimePeriodColumn) {
+            return insertWithFallback({ ...options, allowTimePeriod: false });
+          }
+
+          if (missingQueueNumberColumn || missingPositionColumn) {
+            return insertWithFallback({ ...options, includeQueueNumber: false });
+          }
+        }
+
+        if (error) throw error;
+        return data;
+      };
+
+      const info = await withQueueLock(
+        `${faculty_id || "unassigned"}:${today}`,
+        async () => {
+          let nextQueueNumber: string | null = null;
+          let nextPosition: number | null = null;
+          let queueNumberSupported = !!faculty_id;
+
+          if (faculty_id && queueNumberSupported) {
+            const { data: latest, error: latestErr } = await getSupabase()
+              .from("queue")
+              .select("queue_number")
+              .eq("faculty_id", faculty_id)
+              .eq("queue_date", today)
+              .order("queue_number", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (latestErr) {
+              const message = String(latestErr.message || "").toLowerCase();
+              if (message.includes("queue_number")) {
+                queueNumberSupported = false;
+              } else {
+                throw latestErr;
+              }
+            } else {
+              const currentMax = Number.parseInt(
+                typeof latest?.queue_number === "string"
+                  ? latest.queue_number
+                  : latest?.queue_number ?? "0",
+                10
+              );
+              const nextValue = Number.isFinite(currentMax) ? currentMax + 1 : 1;
+              nextPosition = nextValue;
+              nextQueueNumber = String(nextValue).padStart(3, "0");
+            }
+          }
+
+          return insertWithFallback({
+            includeQueueNumber: queueNumberSupported && !!nextQueueNumber,
+            allowPurpose: true,
+            allowTimePeriod: true,
+            nextQueueNumber,
+            nextPosition,
+          });
+        }
+      );
 
       const { data: newConsultation } = await getSupabase()
         .from("queue")
@@ -2960,6 +3043,7 @@ async function startServer() {
         if (error) throw error;
         await logAudit("faculty_updated", { faculty_id: req.params.id, name, email, department_id, college_id }, req);
         await logActivity("faculty_updated", "faculty", req.params.id, email, "admin", { name, department_id, college_id });
+        broadcast("faculty_updated", { faculty_id: req.params.id });
         res.json(data);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
