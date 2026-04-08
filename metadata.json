@@ -1,0 +1,5 @@
+{
+  "name": "EARIST Queue Management System",
+  "description": "Hybrid Queue Management System for the Computer Engineering Department at EARIST Manila.",
+  "requestFramePermissions": ["display-capture", "camera", "microphone"]
+}
