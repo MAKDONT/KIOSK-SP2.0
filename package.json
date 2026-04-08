@@ -51,8 +51,6 @@
     "@types/node": "^22.14.0",
     "@types/node-schedule": "^2.1.8",
     "@types/nodemailer": "^7.0.11",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",

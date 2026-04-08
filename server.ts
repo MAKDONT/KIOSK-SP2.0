@@ -2960,9 +2960,9 @@ async function startServer() {
       if (targetEmail) {
         await sendEmailNotification(
           targetEmail,
-          "Consultation Appointment Confirmed",
+          "Consultation Booking Confirmed",
           `
-          <h2>Consultation Appointment Confirmed</h2>
+          <h2>Consultation Booking Confirmed</h2>
           <p>Hi ${formatted.student_name || 'Student'},</p>
           <p>You have successfully joined the queue for a consultation.</p>
           <p><strong>Faculty:</strong> ${formatted.faculty_name || 'Your selected faculty'}</p>
@@ -2971,7 +2971,7 @@ async function startServer() {
           <p>You can track your status on the kiosk or web application at any time.</p>
           <p>If you have any questions, please contact the faculty office.</p>
           <br/>
-          <p>Best regards,<br/>College of Engineering</p>
+          <p>Best regards,<br/>Consultation System</p>
           `
         );
       }
@@ -2998,26 +2998,12 @@ async function startServer() {
   app.get("/api/queue/booked-slots", async (req, res) => {
     try {
       const today = getCurrentAppDate();
-      const todayDate = new Date(today);
       
-      // Get Monday of the current week
-      const dayOfWeek = todayDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-      const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // days to go back to get to Monday
-      const monday = new Date(todayDate);
-      monday.setDate(monday.getDate() - daysToMonday);
-      const mondayStr = monday.toISOString().split('T')[0];
-      
-      // Get Sunday of the current week (Monday + 6 days)
-      const sunday = new Date(monday);
-      sunday.setDate(sunday.getDate() + 6);
-      const sundayStr = sunday.toISOString().split('T')[0];
-      
-      // Fetch all active queue entries for the current week with their meet_link
+      // Fetch all active queue entries for today with their meet_link
       const { data, error } = await getSupabase()
         .from("queue")
-        .select("faculty_id, meet_link, queue_date")
-        .gte("queue_date", mondayStr)
-        .lte("queue_date", sundayStr)
+        .select("faculty_id, meet_link")
+        .eq("queue_date", today)
         .in("status", ["waiting", "serving", "ongoing"]);
 
       if (error) {
@@ -3032,13 +3018,12 @@ async function startServer() {
           const timeSlot = parts.length > 0 ? parts[0] : null;
           return {
             faculty_id: q.faculty_id,
-            time_period: timeSlot,
-            queue_date: q.queue_date
+            time_period: timeSlot
           };
         })
         .filter((q: any) => q.time_period && q.faculty_id);
 
-      console.log("📋 Booked slots (current week):", bookedSlots);
+      console.log("📋 Booked slots:", bookedSlots);
       res.json(bookedSlots);
     } catch (err: any) {
       console.error("❌ Booked slots endpoint error:", err.message);
@@ -5172,6 +5157,31 @@ async function startServer() {
       res.status(500).json({ error: err?.message || "Test endpoint error" });
     }
   });
+
+  // Initialize admin email from environment if not already set
+  const initializeAdminEmail = async () => {
+    const envAdminEmail = process.env.ADMIN_EMAIL?.trim();
+    if (!envAdminEmail) return;
+
+    try {
+      const { data: existingEmail } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+
+      if (!existingEmail) {
+        await getSupabase()
+          .from("admin_settings")
+          .upsert({ key: "admin_email", value: normalizeEmail(envAdminEmail) }, { onConflict: "key" });
+        console.log(`✅ Admin email initialized: ${normalizeEmail(envAdminEmail)}`);
+      }
+    } catch (err: any) {
+      console.error("⚠️ Failed to initialize admin email:", err?.message);
+    }
+  };
+
+  await initializeAdminEmail();
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);

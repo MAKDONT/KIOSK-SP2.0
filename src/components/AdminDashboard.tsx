@@ -152,9 +152,6 @@ export default function AdminDashboard() {
   const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
   const [recordingStorageReady, setRecordingStorageReady] = useState(false);
   const [facultySearch, setFacultySearch] = useState("");
-  const wsRef = useRef<WebSocket | null>(null);
-  const intervalRef = useRef<number | null>(null);
-  const isConnectingRef = useRef(false);
 
   useEffect(() => {
     if (safeGetItem("user_role") !== "admin") {
@@ -168,7 +165,7 @@ export default function AdminDashboard() {
     void checkRecordingStorageStatus();
     fetchLiveQueue();
     fetchAdminEmail();
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -183,28 +180,10 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    const userRole = safeGetItem("user_role");
-    if (userRole !== "admin") {
-      // Close any existing WebSocket if not admin
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-      }
-      return;
-    }
+    if (safeGetItem("user_role") !== "admin") return;
 
-    // Prevent multiple WebSocket connections
-    if (isConnectingRef.current || wsRef.current) {
-      return;
-    }
-
-    isConnectingRef.current = true;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    wsRef.current = ws;
 
     ws.onmessage = (event) => {
       try {
@@ -223,32 +202,19 @@ export default function AdminDashboard() {
 
     ws.onerror = (error) => {
       console.error("WebSocket error:", error);
-      isConnectingRef.current = false;
     };
 
     ws.onclose = () => {
       console.warn("WebSocket connection closed");
-      wsRef.current = null;
-      isConnectingRef.current = false;
     };
 
-    ws.onopen = () => {
-      isConnectingRef.current = false;
-    };
-
-    const interval = window.setInterval(() => {
+    const interval = setInterval(() => {
       fetchLiveQueue(1, true);
     }, 15000);
-    intervalRef.current = interval;
 
     return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      clearInterval(interval);
+      ws.close();
     };
   }, []);
 

@@ -112,8 +112,8 @@ export default function KioskView() {
   };
 
   const getAvailabilityRange = (f: Faculty) => {
-    const allSlots = getAllFutureAvailabilitySlots(f);
-    if (allSlots.length === 0) {
+    const todaySlots = getTodayAvailabilitySlots(f);
+    if (todaySlots.length === 0) {
       return null;
     }
 
@@ -124,9 +124,7 @@ export default function KioskView() {
       return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
     };
 
-    // Show first day with availability
-    const firstSlot = allSlots[0];
-    return `${firstSlot.day} ${formatTime(firstSlot.start)} - ${formatTime(firstSlot.end)}`;
+    return todaySlots.map((slot) => `${formatTime(slot.start)} - ${formatTime(slot.end)}`).join(", ");
   };
 
   const getTodayAvailabilitySlots = (f: Faculty): AvailabilitySlot[] => {
@@ -154,101 +152,40 @@ export default function KioskView() {
     return [];
   };
 
-  const getAllFutureAvailabilitySlots = (f: Faculty): AvailabilitySlot[] => {
-    try {
-      const parsed = JSON.parse(f.full_name || "[]");
-      if (Array.isArray(parsed)) {
-        // Just return the base availability patterns (one per day of week)
-        // Don't loop through 30 days to avoid duplicates
-        return parsed.filter((slot: unknown): slot is AvailabilitySlot => {
-          if (!slot || typeof slot !== "object") return false;
-          const candidate = slot as Partial<AvailabilitySlot>;
-          return (
-            typeof candidate.day === "string" &&
-            typeof candidate.start === "string" &&
-            typeof candidate.end === "string" &&
-            candidate.day.length > 0 &&
-            candidate.start.length > 0 &&
-            candidate.end.length > 0
-          );
-        });
-      }
-    } catch (e) {
-      // ignore
-    }
-    return [];
-  };
-
   const getAvailabilitySlots = (f: Faculty) => {
-    const allSlots = getAllFutureAvailabilitySlots(f);
-    const slotsByDate: Record<string, { timeString: string, isPast: boolean, timeOnly: string }[]> = {};
-    const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    
-    const now = new Date();
-    const addedTimeStrings = new Set<string>(); // Track added slots to prevent duplicates
+    const todaySlots = getTodayAvailabilitySlots(f);
+    const generatedSlots: { timeString: string, isPast: boolean }[] = [];
 
-    // Get Monday of current week
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // days to go back to get to Monday
-    const monday = new Date(today);
-    monday.setDate(monday.getDate() - daysToMonday);
+    todaySlots.forEach((slot) => {
+      const [startHour, startMin] = slot.start.split(":").map(Number);
+      const [endHour, endMin] = slot.end.split(":").map(Number);
 
-    // Loop from Monday to Sunday (7 days)
-    for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-      const currentDate = new Date(monday);
-      currentDate.setDate(currentDate.getDate() + dayOffset);
-      const dayName = daysOfWeek[currentDate.getDay()];
-      const dateStr = currentDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-      const dateKey = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD for grouping
+      let current = new Date();
+      current.setHours(startHour, startMin, 0, 0);
 
-      // Find slots for this day
-      const slotsForDay = allSlots.filter(slot => slot.day === dayName);
+      const end = new Date();
+      end.setHours(endHour, endMin, 0, 0);
 
-      slotsForDay.forEach((slot) => {
-        const [startHour, startMin] = slot.start.split(":").map(Number);
-        const [endHour, endMin] = slot.end.split(":").map(Number);
+      const now = new Date();
 
-        let current = new Date(currentDate);
-        current.setHours(startHour, startMin, 0, 0);
+      while (current < end) {
+        const slotStart = new Date(current);
+        const slotEnd = new Date(current.getTime() + 15 * 60000);
 
-        const end = new Date(currentDate);
-        end.setHours(endHour, endMin, 0, 0);
+        if (slotEnd > end) break;
 
-        while (current < end) {
-          const slotStart = new Date(current);
-          const slotEnd = new Date(current.getTime() + 15 * 60000);
+        const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
 
-          if (slotEnd > end) break;
+        generatedSlots.push({
+          timeString: `${slot.day} ${formatTime(slotStart)} - ${formatTime(slotEnd)}`,
+          isPast: slotStart < now
+        });
 
-          const formatTime = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
-          const timeOnly = formatTime(slotStart);
-          const timeString = `${dayName} ${dateStr} ${timeOnly}`;
+        current = new Date(slotEnd.getTime() + 5 * 60000);
+      }
+    });
 
-          // Skip if already added (deduplication)
-          if (addedTimeStrings.has(timeString)) {
-            current = new Date(slotEnd.getTime() + 5 * 60000);
-            continue;
-          }
-
-          if (!slotsByDate[dateKey]) {
-            slotsByDate[dateKey] = [];
-          }
-
-          slotsByDate[dateKey].push({
-            timeString: timeString,
-            isPast: slotStart < now,
-            timeOnly: timeOnly
-          });
-
-          addedTimeStrings.add(timeString);
-
-          current = new Date(slotEnd.getTime() + 5 * 60000);
-        }
-      });
-    }
-
-    return slotsByDate;
+    return generatedSlots;
   };
 
   const handleJoinQueue = async () => {
@@ -312,7 +249,7 @@ export default function KioskView() {
     );
   }
 
-  const availableFaculty = faculty.filter((f) => getAllFutureAvailabilitySlots(f).length > 0);
+  const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
 
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
@@ -324,7 +261,7 @@ export default function KioskView() {
           </button>
           <Users className="w-8 h-8 sm:w-12 sm:h-12 shrink-0" style={{ color: 'var(--clay-accent-warm)' }} />
           <h1 className="text-lg sm:text-3xl lg:text-4xl font-bold tracking-tight truncate" style={{ color: 'var(--clay-text-primary)' }}>
-            Student Dashboard
+            Student Booking Dashboard
           </h1>
           <div className="ml-2 sm:ml-4 flex items-center gap-2 px-2 sm:px-3 py-1 rounded-full border shrink-0 badge badge-success">
             <span className="relative flex h-2 w-2">
@@ -444,83 +381,62 @@ export default function KioskView() {
                           className="mt-4 pt-4 border-t overflow-hidden transition-opacity duration-150"
                           style={{ borderColor: 'rgba(0,0,0,0.1)' }}
                         >
-                            <h4 className="text-base font-bold mb-4" style={{ color: 'var(--clay-text-primary)' }}>
+                            <h4 className="text-base font-bold mb-3" style={{ color: 'var(--clay-text-primary)' }}>
                               Select a Time Slot
                             </h4>
                             {(() => {
-                              const slotsByDate = getAvailabilitySlots(f);
-                              const dateKeys = Object.keys(slotsByDate).sort();
-                              
-                              if (dateKeys.length === 0) {
-                                return (
-                                  <div className="py-3 text-center text-sm font-bold rounded-lg text-white" style={{ background: 'var(--clay-accent-soft-coral)' }}>
-                                    {f.status === 'busy' ? 'Currently in consultation' : 'Not available for consultation'}
-                                  </div>
-                                );
-                              }
-
+                              const slots = getAvailabilitySlots(f);
                               return (
-                                <div className="space-y-5">
-                                  {dateKeys.map((dateKey) => {
-                                    const slots = slotsByDate[dateKey];
-                                    const dateObj = new Date(dateKey);
-                                    const dateStr = dateObj.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-                                    const isToday = dateKey === new Date().toISOString().split('T')[0];
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                                  {slots.map((slotObj, idx) => {
+                                    const { timeString, isPast } = slotObj;
+                                    const isBooked = bookedSlots.some(b => b.faculty_id === f.id && b.time_period === timeString);
+                                    const isSelected = selectedTimePeriod === timeString;
+                                    const isDisabled = isBooked || isPast || isSelected;
                                     
                                     return (
-                                      <div key={dateKey}>
-                                        <div className="flex items-center gap-3 mb-3 px-1">
-                                          <h5 className="font-bold text-sm" style={{ color: 'var(--clay-text-primary)' }}>
-                                            {dateStr}
-                                          </h5>
-                                          {isToday && (
-                                            <span className="px-2 py-0.5 bg-blue-200 text-blue-800 text-xs font-bold rounded-full">Today</span>
-                                          )}
-                                        </div>
-                                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                                          {slots.map((slotObj, idx) => {
-                                            const { timeString, isPast, timeOnly } = slotObj;
-                                            const isBooked = bookedSlots.some(b => b.faculty_id === f.id && b.time_period === timeString);
-                                            const isSelected = selectedTimePeriod === timeString;
-                                            const isDisabled = isBooked || isPast;
-                                            
-                                            return (
-                                              <button
-                                                key={idx}
-                                                disabled={isDisabled}
-                                                onMouseEnter={() => !isDisabled && setHoveredSlot(timeString)}
-                                                onMouseLeave={() => setHoveredSlot(null)}
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  if (!isDisabled) {
-                                                    setSelectedFaculty(f.id);
-                                                    setSelectedTimePeriod(timeString);
-                                                  }
-                                                }}
-                                                className={`w-full py-2 px-1 rounded-lg text-xs font-bold transition-all text-white ${
-                                                  isDisabled
-                                                    ? "opacity-40 cursor-not-allowed"
-                                                    : "cursor-pointer hover:scale-105"
-                                                }`}
-                                                style={{
-                                                  background: isSelected
-                                                    ? 'var(--clay-accent-warm)'
-                                                    : isDisabled 
-                                                      ? '#999999' 
-                                                      : hoveredSlot === timeString 
-                                                        ? 'var(--clay-accent-warm)' 
-                                                        : 'var(--clay-accent-sky)',
-                                                  transform: isSelected ? 'scale(1.05)' : 'scale(1)'
-                                                }}
-                                              >
-                                                {timeOnly}
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
+                                      <button
+                                        key={idx}
+                                        disabled={isDisabled}
+                                        onMouseEnter={() => !isDisabled && setHoveredSlot(timeString)}
+                                        onMouseLeave={() => setHoveredSlot(null)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (!isDisabled) {
+                                            setSelectedFaculty(f.id);
+                                            setSelectedTimePeriod(timeString);
+                                          }
+                                        }}
+                                        className={`w-full py-3 px-2 rounded-lg text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 text-white ${
+                                          isDisabled
+                                            ? "opacity-50 cursor-not-allowed"
+                                            : "cursor-pointer"
+                                        }`}
+                                        style={{
+                                          background: isDisabled 
+                                            ? '#999999' 
+                                            : hoveredSlot === timeString 
+                                              ? 'var(--clay-accent-warm)' 
+                                              : 'var(--clay-accent-sky)'
+                                        }}
+                                      >
+                                        <Clock className="w-4 h-4" />
+                                        <span>{timeString}</span>
+                                      </button>
                                     );
                                   })}
+                                  
+                                  {slots.length === 0 && f.status === 'busy' && (
+                                    <div className="col-span-2 sm:col-span-3 py-3 text-center text-sm font-bold rounded-lg text-white" style={{ background: 'var(--clay-accent-soft-coral)' }}>
+                                      Currently in consultation
+                                    </div>
+                                  )}
+                                  
+                                  {slots.length === 0 && f.status === 'offline' && (
+                                    <div className="col-span-2 sm:col-span-3 py-3 text-center text-sm font-bold rounded-lg text-white" style={{ background: '#999999' }}>
+                                      Not available for booking
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })()}
@@ -551,11 +467,13 @@ export default function KioskView() {
                 required
               >
                 <option value="">Select your concern...</option>
-                <option value="Academic Advising">Academic advising - course enrollment</option>
+                <option value="Academic Advising">Academic Advising</option>
+                <option value="Grade Consultation">Grade Consultation</option>
                 <option value="Thesis / Capstone Advising">Thesis / Capstone Advising</option>
+                <option value="Course Enrollment / Schedule">Course Enrollment / Schedule</option>
                 <option value="Internship / OJT Concern">Internship / OJT Concern</option>
-                <option value="Attendance / Absence Concern">Grade Consultation / Attendance </option>
-                <option value="Other">Other Personal Concerns</option>
+                <option value="Attendance / Absence Concern">Attendance / Absence Concern</option>
+                <option value="Other">Other</option>
               </select>
             </div>
             <button
@@ -565,7 +483,7 @@ export default function KioskView() {
             >
               {loading ? "Processing..." : <>
                 <CheckCircle className="w-10 h-10" />
-                CONFIRM APPOINTMENT
+                CONFIRM BOOKING
               </>}
             </button>
           </div>

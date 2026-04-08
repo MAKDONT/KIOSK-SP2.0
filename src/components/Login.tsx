@@ -56,24 +56,14 @@ export default function Login() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [liveQueue, setLiveQueue] = useState<LiveQueueItem[]>([]);
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const intervalRef = useRef<number | null>(null);
-  const isConnectingRef = useRef(false);
 
   useEffect(() => {
     fetchFaculty();
     fetchDepartments();
     fetchLiveQueue();
     
-    // Prevent multiple WebSocket connections
-    if (isConnectingRef.current || wsRef.current) {
-      return;
-    }
-    
-    isConnectingRef.current = true;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    wsRef.current = ws;
     
     ws.onmessage = (event) => {
       try {
@@ -89,32 +79,19 @@ export default function Login() {
 
     ws.onerror = (error) => {
       console.error("WebSocket error:", error);
-      isConnectingRef.current = false;
     };
 
     ws.onclose = () => {
       console.warn("WebSocket connection closed");
-      wsRef.current = null;
-      isConnectingRef.current = false;
     };
 
-    ws.onopen = () => {
-      isConnectingRef.current = false;
-    };
-
-    const interval = window.setInterval(() => {
+    const interval = setInterval(() => {
       fetchLiveQueue(1, true);
     }, 15000);
-    intervalRef.current = interval;
 
     return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      clearInterval(interval);
+      ws.close();
     };
   }, []);
 
@@ -450,7 +427,7 @@ export default function Login() {
             <h1 className="text-5xl sm:text-6xl font-bold tracking-tight" style={{ color: 'var(--clay-text-primary)' }}>
               Welcome
             </h1>
-            <p className="text-2xl sm:text-3xl" style={{ color: 'var(--clay-text-secondary)' }}>Student Consultation System</p>
+            <p className="text-2xl sm:text-3xl" style={{ color: 'var(--clay-text-secondary)' }}>Student Consultation Booking System</p>
             {availableFaculty.length === 0 && (
               <p className="text-lg sm:text-xl font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
                  No faculty available right now
@@ -487,7 +464,7 @@ export default function Login() {
                     opacity: availableFaculty.length === 0 ? 0.5 : 1
                   }}
                 >
-                  <Keyboard className="w-7 h-7 sm:w-8 sm:h-8" /> Register
+                  <Keyboard className="w-7 h-7 sm:w-8 sm:h-8" /> Manual Input
                 </button>
               </div>
 
@@ -610,7 +587,7 @@ export default function Login() {
             {loading ? "Please wait..." : (
               <>
                 <LogIn className="w-8 h-8" />
-                CONTINUE 
+                CONTINUE
               </>
             )}
           </button>

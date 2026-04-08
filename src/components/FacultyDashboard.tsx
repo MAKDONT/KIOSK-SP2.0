@@ -88,8 +88,6 @@ export default function FacultyDashboard() {
   const mixedAudioContextRef = useRef<AudioContext | null>(null);
   const discardRecordingOnStopRef = useRef(false);
   const recordingContextRef = useRef<RecordingContext | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const isConnectingRef = useRef(false);
 
   const logoutStaff = () => {
     clearStaffSession();
@@ -176,20 +174,15 @@ export default function FacultyDashboard() {
     if (selectedFaculty) {
       fetchQueue();
       void fetchGoogleMeetStatus();
-      
-      // Prevent multiple WebSocket connections
-      if (isConnectingRef.current || wsRef.current) {
-        return;
-      }
-
-      isConnectingRef.current = true;
       // Setup WebSocket for real-time updates
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(`${protocol}//${window.location.host}`);
-      wsRef.current = ws;
+      let shouldCloseAfterConnect = false;
 
       ws.onopen = () => {
-        isConnectingRef.current = false;
+        if (shouldCloseAfterConnect) {
+          ws.close();
+        }
       };
       
       ws.onmessage = (event) => {
@@ -219,20 +212,10 @@ export default function FacultyDashboard() {
         }
       };
 
-      ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
-        isConnectingRef.current = false;
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        isConnectingRef.current = false;
-      };
-
       return () => {
-        if (wsRef.current) {
-          wsRef.current.close();
-          wsRef.current = null;
+        shouldCloseAfterConnect = true;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
         }
       };
     }
@@ -904,6 +887,21 @@ export default function FacultyDashboard() {
 
   const selectedFacultyData = faculty.find(f => f.id === selectedFaculty);
 
+  const toggleFacultyStatus = async () => {
+    if (!selectedFacultyData) return;
+    const newStatus = selectedFacultyData.status === 'available' ? 'offline' : 'available';
+    try {
+      await fetch(`/api/faculty/${selectedFaculty}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      fetchFaculty();
+    } catch (err) {
+      console.error("Failed to update status", err);
+    }
+  };
+
   const openAvailabilityModal = () => {
     if (!selectedFacultyData) return;
     try {
@@ -1311,6 +1309,24 @@ export default function FacultyDashboard() {
             <h3 className="text-lg font-bold text-neutral-900 mb-4">Session Controls</h3>
             {selectedFacultyData ? (
               <div className="space-y-4">
+                <div className="p-4 rounded-xl" style={{ background: 'var(--clay-bg-secondary)' }}>
+                  <p className="text-sm mb-1" style={{ color: 'var(--clay-text-secondary)' }}>Current Status</p>
+                  <p className="text-lg font-medium flex items-center gap-2" style={{ color: selectedFacultyData.status === 'available' ? 'var(--clay-accent-sage)' : selectedFacultyData.status === 'busy' ? 'var(--clay-accent-warm)' : 'var(--clay-text-secondary)' }}>
+                    <span className="w-3 h-3 rounded-full" style={{ 
+                      background: selectedFacultyData.status === 'available' ? 'var(--clay-accent-sage)' : selectedFacultyData.status === 'busy' ? 'var(--clay-accent-warm)' : 'var(--clay-text-light)',
+                      animation: selectedFacultyData.status === 'available' ? 'pulse 2s infinite' : 'none'
+                    }} />
+                    {selectedFacultyData.status === 'available' ? 'Accepting Consultations' : 
+                     selectedFacultyData.status === 'busy' ? 'Busy' : 'Offline'}
+                  </p>
+                </div>
+                <button 
+                  onClick={toggleFacultyStatus}
+                  className="w-full py-3 px-4 text-white font-medium rounded-xl transition-colors" style={{ background: selectedFacultyData.status === 'available' ? 'var(--clay-accent-soft-coral)' : 'var(--clay-accent-sage)' }}
+                >
+                  {selectedFacultyData.status === 'available' ? 'Go Offline' : 'Go Available'}
+                </button>
+
                 <button
                   onClick={openPasswordModal}
                   className="w-full py-3 px-4 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2" style={{ background: 'var(--clay-accent-warm)' }}
