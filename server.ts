@@ -623,6 +623,47 @@ async function startServer() {
   app.use(cookieParser());
   app.set("trust proxy", 1);
 
+  // --- RENDER-SPECIFIC OPTIMIZATIONS ---
+  // Set request timeout for Render's 30-60 second limit
+  app.use((req, res, next) => {
+    // Timeout long-running queries after 25 seconds (leaving buffer for Render's timeout)
+    req.setTimeout(25000);
+    res.setTimeout(25000);
+    next();
+  });
+
+  // Health check endpoint for Render's health checks
+  app.get("/health", async (_req, res) => {
+    try {
+      // Quick database connectivity check (5 second timeout)
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Database health check timeout")), 5000)
+      );
+      
+      const healthCheckPromise = getSupabase()
+        .from("faculty")
+        .select("id")
+        .limit(1);
+
+      await Promise.race([healthCheckPromise, timeoutPromise]);
+      
+      res.status(200).json({ 
+        status: "ok", 
+        timestamp: new Date().toISOString(),
+        database: "connected"
+      });
+    } catch (err: any) {
+      // Still return 200 to allow graceful restart, but log the issue
+      console.error("Health check database failed:", err?.message);
+      res.status(200).json({ 
+        status: "degraded", 
+        timestamp: new Date().toISOString(),
+        database: "error"
+      });
+    }
+  });
+  // --- END RENDER OPTIMIZATIONS ---
+
   // --- CORS Configuration ---
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:5173").split(",").map(o => o.trim()).filter(Boolean);
   
@@ -5476,6 +5517,24 @@ async function startServer() {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
+
+  // Graceful shutdown for Render deployments
+  const gracefulShutdown = () => {
+    console.log("Received shutdown signal, gracefully closing...");
+    server.close(() => {
+      console.log("Server closed");
+      process.exit(0);
+    });
+    
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+      console.error("Forced shutdown after 10 seconds");
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on("SIGTERM", gracefulShutdown);
+  process.on("SIGINT", gracefulShutdown);
 
   // Schedule queue clear every day at 11:59 PM
   const scheduleQueueClear = () => {
