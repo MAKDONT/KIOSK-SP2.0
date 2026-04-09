@@ -1001,9 +1001,39 @@ async function startServer() {
       : normalized.length > 0;
   };
   let recordingsBucketReadyPromise: Promise<void> | null = null;
+
+  // Retry helper for transient network failures
+  const retryWithBackoff = async <T>(
+    operation: () => Promise<T>,
+    maxRetries: number = 3,
+    initialDelayMs: number = 500
+  ): Promise<T> => {
+    let lastError: any;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        lastError = err;
+        // Check if it's a transient network error
+        if (
+          (err.message && /fetch failed|connection|timeout|ECONNREFUSED|ENOTFOUND/i.test(err.message)) ||
+          (err.statusCode && err.statusCode >= 500)
+        ) {
+          if (attempt < maxRetries - 1) {
+            const delayMs = initialDelayMs * Math.pow(2, attempt);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  };
+
   const ensureSupabaseRecordingsBucket = async () => {
     if (!recordingsBucketReadyPromise) {
-      recordingsBucketReadyPromise = (async () => {
+      recordingsBucketReadyPromise = retryWithBackoff(async () => {
         const supabase = getSupabase();
         const { data: bucket, error: getBucketError } = await supabase.storage.getBucket(SUPABASE_RECORDINGS_BUCKET);
         const bucketMissing =
@@ -1022,7 +1052,7 @@ async function startServer() {
             throw createBucketError;
           }
         }
-      })().catch((err) => {
+      }).catch((err) => {
         recordingsBucketReadyPromise = null;
         throw err;
       });
@@ -3210,7 +3240,6 @@ async function startServer() {
         datesToShow.push(date);
       }
       
-      console.log(`[DEBUG] Generating weekly schedule for faculty ${facultyId}. Today is ${daysOfWeek[todayDay]} (${today.toLocaleDateString()}). Showing ${datesToShow.length} days from ${daysOfWeek[monday.getDay()]} ${monday.toLocaleDateString()}.`);
       const schedule: any[] = [];
 
       // Generate slots for each collected date
@@ -3254,7 +3283,6 @@ async function startServer() {
           end.setHours(endHour, endMin, 0, 0);
 
           const now = new Date();
-          console.log(`[DEBUG] Generating slots for ${day} ${dateStr} from ${slot.start} to ${slot.end}. Now: ${now.toISOString()}`);
 
           while (current < end) {
             const slotStart = new Date(current);
@@ -3264,8 +3292,6 @@ async function startServer() {
 
             const isPast = slotStart < now;
             const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
-
-            console.log(`[DEBUG]   Slot: ${timeString}, slotStart=${slotStart.toISOString()}, isPast=${isPast}`);
 
             daySchedule.slots.push({
               start: slotStart.toISOString(),
@@ -3281,7 +3307,6 @@ async function startServer() {
         schedule.push(daySchedule);
       }
 
-      console.log(`[DEBUG] Final schedule has ${schedule.length} days, starting from next Monday`);
       res.json(schedule);
     } catch (err: any) {
       console.error("Weekly schedule error:", err);
@@ -4761,14 +4786,16 @@ async function startServer() {
       const objectPath = buildSupabaseRecordingPath(objectName);
       const uploadFileBuffer = fs.readFileSync(file.path);
 
-      const { error: uploadError } = await supabase.storage.from(SUPABASE_RECORDINGS_BUCKET).upload(
-        objectPath,
-        uploadFileBuffer,
-        {
-          contentType: file.mimetype || "audio/webm",
-          upsert: false,
-        }
-      );
+      const { error: uploadError } = await retryWithBackoff(async () => {
+        return await supabase.storage.from(SUPABASE_RECORDINGS_BUCKET).upload(
+          objectPath,
+          uploadFileBuffer,
+          {
+            contentType: file.mimetype || "audio/webm",
+            upsert: false,
+          }
+        );
+      }, 3, 1000);
 
       if (uploadError) {
         throw uploadError;
@@ -4783,13 +4810,18 @@ async function startServer() {
         bucket: SUPABASE_RECORDINGS_BUCKET,
       });
     } catch (err: any) {
-      console.error("Supabase Recording Upload Error:", err);
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
 
+      const errorMessage = err?.message || "Unknown error";
+      const isNetworkError = /fetch failed|connection|timeout|ECONNREFUSED|ENOTFOUND/i.test(errorMessage);
+      
       res.status(500).json({
-        error: "Failed to upload recording.",
+        error: isNetworkError
+          ? "Supabase storage temporarily unavailable. Please try again."
+          : "Failed to upload recording to storage.",
+        details: process.env.NODE_ENV === "development" ? errorMessage : undefined,
       });
     }
   });
