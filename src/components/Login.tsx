@@ -486,7 +486,7 @@ export default function Login() {
                   >
                     <ScanLine className="w-16 h-16 sm:w-20 sm:h-20 mb-3" />
                     <span className="text-xl sm:text-2xl font-bold">
-                      {availableFaculty.length === 0 ? "System Offline" : "Scan Barcode in Student ID "}
+                      {availableFaculty.length === 0 ? "System Offline" : "Scan your Student ID's barcode "}
                     </span>
                     {availableFaculty.length > 0 && (
                       <span className="text-lg sm:text-xl" style={{ fontSize: '1rem', color: 'var(--clay-text-secondary)', marginTop: '0.1rem' }}>

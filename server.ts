@@ -187,6 +187,61 @@ const normalizeAvailabilityData = (fullNameField: any): any[] => {
   }
 };
 
+/**
+ * Check if a faculty has any available (future) time slots
+ * Returns true if they have at least one available slot, false otherwise
+ */
+const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
+  if (!availabilitySlots || availabilitySlots.length === 0) return false;
+
+  const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const today = new Date();
+
+  // Find next Monday
+  const todayDay = today.getDay();
+  let daysUntilMonday = 0;
+
+  if (todayDay === 0) {
+    daysUntilMonday = 1;
+  } else if (todayDay === 1) {
+    daysUntilMonday = 7;
+  } else {
+    daysUntilMonday = 8 - todayDay;
+  }
+
+  const now = new Date();
+
+  // Check next 5 days (Mon-Fri)
+  for (let i = 0; i < 5; i++) {
+    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday + i);
+    const day = daysOfWeek[date.getDay()];
+
+    // Check if this day has scheduled slots
+    const daySlots = availabilitySlots.filter((slot: any) => slot.day === day);
+
+    if (daySlots.length === 0) continue;
+
+    // Check if any slot in this day is in the future
+    for (const slot of daySlots) {
+      const [startHour, startMin] = slot.start.split(":").map(Number);
+      const [endHour, endMin] = slot.end.split(":").map(Number);
+
+      const slotStart = new Date(date);
+      slotStart.setHours(startHour, startMin, 0, 0);
+
+      // If slot end time is in the future, faculty has available time
+      const slotEnd = new Date(date);
+      slotEnd.setHours(endHour, endMin, 0, 0);
+
+      if (slotEnd > now) {
+        return true; // Has at least one available slot
+      }
+    }
+  }
+
+  return false; // No available slots found
+};
+
 // ===== ADMIN SESSION MANAGEMENT =====
 const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const adminSessions = new Map<string, { createdAt: number; ip: string; userAgent: string }>();
@@ -2507,10 +2562,13 @@ async function startServer() {
 
       // Normalize availability data  and return faculty data without the password
       const normalizedFull_name = normalizeAvailabilityData(data.full_name);
+      const hasSlots = hasAvailableSlots(normalizedFull_name);
+      const automaticStatus = hasSlots ? "available" : "offline";
       const { password: _pw, ...safeData } = data;
       res.json({
         ...safeData,
-        full_name: normalizedFull_name
+        full_name: normalizedFull_name,
+        status: automaticStatus // Override with automatic status based on availability
       });
     } catch (err: any) {
       console.error("Faculty login error:", err);
@@ -2579,9 +2637,14 @@ async function startServer() {
         // Normalize availability data
         const normalizedFull_name = normalizeAvailabilityData(f.full_name);
         
+        // Calculate automatic status based on available slots
+        const hasSlots = hasAvailableSlots(normalizedFull_name);
+        const automaticStatus = hasSlots ? "available" : "offline";
+        
         return {
           ...safeFields,
           full_name: normalizedFull_name,
+          status: automaticStatus, // Override with automatic status based on availability
           department: dept ? dept.name : "Unknown Department"
         };
       });
