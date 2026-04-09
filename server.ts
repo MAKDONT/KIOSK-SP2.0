@@ -5790,14 +5790,16 @@ async function startServer() {
   const scheduleConsultationReminders = () => {
     const sendReminderEmails = async () => {
       try {
-        // Get all waiting consultations with their faculty info
-        const { data: waitingConsultations, error: fetchError } = await getSupabase()
-          .from("queue")
-          .select("id, student_id, student_email, meet_link, faculty_id, queue_date, students(full_name, email)")
-          .eq("status", "waiting");
+        // Get all active consultations with their faculty info (with retry logic for Render stability)
+        const { data: waitingConsultations, error: fetchError } = await retryWithBackoff(async () => {
+          return await getSupabase()
+            .from("queue")
+            .select("id, student_id, student_email, meet_link, faculty_id, queue_date, students(full_name, email)")
+            .in("status", ["waiting", "serving", "ongoing"]);
+        }, 2, 500);
 
         if (fetchError) {
-          console.error("❌ Error fetching waiting consultations:", fetchError.message);
+          console.error("❌ [SCHEDULER] Supabase fetch error:", fetchError.message);
           return;
         }
 
@@ -5810,7 +5812,7 @@ async function startServer() {
         const currentTotalMinutes = currentHours * 60 + currentMinutes;
         
         console.log(`⏰ [SCHEDULER] Current time: ${currentHours}:${String(currentMinutes).padStart(2, '0')} (${currentTotalMinutes} minutes)`);
-        console.log(`📋 [SCHEDULER] Found ${waitingConsultations.length} waiting consultations`);
+        console.log(`📋 [SCHEDULER] Found ${waitingConsultations.length} active consultations`);
 
         for (const consultation of waitingConsultations) {
 
@@ -6045,16 +6047,61 @@ async function startServer() {
   scheduleConsultationReminders();
 
   // ==========================================
+  // HEALTH CHECK: Scheduler Status Endpoint
+  // ==========================================
+  app.get("/api/admin/scheduler-status", async (_req, res) => {
+    try {
+      const now = new Date();
+      const uptime = Math.floor(process.uptime());
+      
+      // Try a quick database connection test
+      const { error: dbError } = await getSupabase()
+        .from("queue")
+        .select("id")
+        .limit(1);
+      
+      const dbConnected = !dbError;
+      
+      res.json({
+        status: "ok",
+        uptime_seconds: uptime,
+        uptime_formatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
+        database_connected: dbConnected,
+        schedulers: {
+          consultation_reminders: "running (checks every 30s)",
+          queue_auto_advance: "running (checks every 60s)",
+          queue_clear: "running (daily at 11:59 PM)",
+          system_logs_deletion: "running (daily at 11:59 PM)",
+          daily_cleanup: "running (daily at 00:00)",
+          supabase_cleanup: "running (every hour)",
+          drive_cleanup: "running (scheduled)"
+        },
+        last_check: now.toISOString(),
+        note: "If database_connected is false, check Supabase connection"
+      });
+    } catch (err: any) {
+      console.error("Scheduler status check error:", err);
+      res.status(500).json({
+        status: "error",
+        error: err?.message || "Failed to check scheduler status",
+        uptime_seconds: Math.floor(process.uptime())
+      });
+    }
+  });
+
+  // ==========================================
   // SCHEDULER: Auto-advance queue - cancel WAITING students if their time slot passed
   // ==========================================
   const scheduleQueueAutoAdvance = () => {
     const autoAdvanceQueue = async () => {
       try {
-        // Get all WAITING consultations (queued, not yet being served)
-        const { data: ongoingConsultations, error: fetchError } = await getSupabase()
-          .from("queue")
-          .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email)")
-          .eq("status", "waiting");
+        // Get all WAITING consultations with retry logic for Render stability
+        const { data: ongoingConsultations, error: fetchError } = await retryWithBackoff(async () => {
+          return await getSupabase()
+            .from("queue")
+            .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email)")
+            .eq("status", "waiting");
+        }, 2, 500);
 
         if (fetchError) {
           console.error("❌ Auto-advance error fetching consultations:", fetchError.message);
