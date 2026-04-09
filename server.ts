@@ -816,7 +816,7 @@ async function startServer() {
     const { data, error } = await getSupabase()
       .from("queue")
       .select(`
-        id, status, created_at, faculty_id, meet_link,
+        id, status, created_at, queue_date, faculty_id, meet_link,
         students (full_name, student_number),
         faculty (name)
       `)
@@ -840,6 +840,23 @@ async function startServer() {
             ? parts[0]
             : null;
 
+      // Format consultation date and day
+      let consultation_date_display = "";
+      if (row.queue_date) {
+        try {
+          const dateObj = new Date(row.queue_date);
+          const formatter = new Intl.DateTimeFormat("en-US", {
+            weekday: "long",
+            month: "short",
+            day: "numeric"
+          });
+          consultation_date_display = formatter.format(dateObj);
+        } catch (e) {
+          // If date parsing fails, use as-is
+          consultation_date_display = row.queue_date;
+        }
+      }
+
       let mappedStatus = row.status;
       if (row.status === "ongoing") mappedStatus = "serving";
 
@@ -853,6 +870,8 @@ async function startServer() {
         student_number: row.students?.student_number || "",
         time_period,
         meet_link: actual_link,
+        consultation_date_display,
+        queue_date: row.queue_date
       };
     });
 
@@ -3059,6 +3078,13 @@ async function startServer() {
       };
 
       if (targetEmail) {
+        // Format consultation date for email
+        const consultationDate = new Intl.DateTimeFormat("en-US", {
+          weekday: "long",
+          month: "long",
+          day: "numeric"
+        }).format(new Date());
+        
         await sendEmailNotification(
           targetEmail,
           "Consultation Booking Confirmed",
@@ -3067,6 +3093,7 @@ async function startServer() {
           <p>Hi ${formatted.student_name || 'Student'},</p>
           <p>You have successfully joined the queue for a consultation.</p>
           <p><strong>Faculty:</strong> ${formatted.faculty_name || 'Your selected faculty'}</p>
+          <p><strong>Date:</strong> ${consultationDate}</p>
           ${time_period ? `<p><strong>Time Slot:</strong> ${time_period}</p>` : ''}
           <p>You will receive a reminder email when your consultation time is approaching.</p>
           <p>You can track your status on the kiosk or web application at any time.</p>
@@ -3151,32 +3178,44 @@ async function startServer() {
       // Normalize availability data
       const availabilitySlots = normalizeAvailabilityData(facultyData.full_name);
 
-      // Generate weekly schedule starting from NEXT MONDAY
+      // Generate schedule for current week (Mon-Fri), showing from Monday to today
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const today = new Date();
-      
-      // Find next Monday
       const todayDay = today.getDay();
-      let daysUntilMonday = 0;
       
+      // If today is weekend (Sat/Sun), show current week Mon-Fri
+      // If today is weekday (Mon-Fri), show Mon through today
+      const datesToShow: Date[] = [];
+      
+      // Calculate days to go back to get to Monday
+      let daysToMonday = 0;
       if (todayDay === 0) {
-        // Today is Sunday, next Monday is tomorrow
-        daysUntilMonday = 1;
-      } else if (todayDay === 1) {
-        // Today is Monday, next Monday is in 7 days
-        daysUntilMonday = 7;
+        // Today is Sunday, go back 2 days to Monday of this week
+        daysToMonday = -2;
+      } else if (todayDay === 6) {
+        // Today is Saturday, go back 1 day to Friday (show Mon-Fri of this week)
+        daysToMonday = -1;
       } else {
-        // Other days: calculate days until next Monday
-        daysUntilMonday = 8 - todayDay;
+        // Today is Mon-Fri, go back to Monday of this week
+        daysToMonday = -(todayDay - 1);
       }
       
-      console.log(`[DEBUG] Generating weekly schedule for faculty ${facultyId}. Today is ${daysOfWeek[todayDay]}, next Monday is in ${daysUntilMonday} days`);
+      // Get Monday date
+      const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysToMonday);
+      
+      // Collect dates from Monday to today (or Friday if today is weekend)
+      const endDay = todayDay === 0 || todayDay === 6 ? 5 : todayDay; // If weekend, show through Friday; otherwise show through today
+      for (let i = 0; i < endDay; i++) {
+        const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+        datesToShow.push(date);
+      }
+      
+      console.log(`[DEBUG] Generating weekly schedule for faculty ${facultyId}. Today is ${daysOfWeek[todayDay]} (${today.toLocaleDateString()}). Showing ${datesToShow.length} days from ${daysOfWeek[monday.getDay()]} ${monday.toLocaleDateString()}.`);
       const schedule: any[] = [];
 
-      // Generate Mon-Fri starting from next Monday
-      for (let i = 0; i < 5; i++) {
-        // Create date at START of day in local time (not UTC)
-        const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday + i);
+      // Generate slots for each collected date
+      for (let i = 0; i < datesToShow.length; i++) {
+        const date = datesToShow[i];
         
         const day = daysOfWeek[date.getDay()];
         // Format date as YYYY-MM-DD using local date
@@ -5649,7 +5688,7 @@ async function startServer() {
         // Get all waiting consultations with their faculty info
         const { data: waitingConsultations, error: fetchError } = await getSupabase()
           .from("queue")
-          .select("id, student_id, student_email, meet_link, faculty_id, students(full_name, email)")
+          .select("id, student_id, student_email, meet_link, faculty_id, queue_date, students(full_name, email)")
           .eq("status", "waiting");
 
         if (fetchError) {
@@ -5773,6 +5812,13 @@ async function startServer() {
               console.log(`   ✅ SENDING 5-MINUTE ADVANCE EMAIL TO STUDENT`);
               if (studentEmail) {
                 console.log(`   📧 Sending advance reminder to ${studentEmail}...`);
+                // Format consultation date for reminder
+                const consultationDate = new Intl.DateTimeFormat("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric"
+                }).format(new Date((consultation as any)?.queue_date || new Date()));
+                
                 await sendEmailNotification(
                   studentEmail,
                   "Consultation Reminder - 5 Minutes Until Start",
@@ -5780,6 +5826,7 @@ async function startServer() {
                   <h2>Consultation Reminder</h2>
                   <p>Hi ${studentName},</p>
                   <p><strong>Your consultation is starting in 5 minutes!</strong></p>
+                  <p><strong>Date:</strong> ${consultationDate}</p>
                   <p><strong>Time:</strong> ${timePart}</p>
                   <p>Please prepare and be ready to join the consultation.</p>
                   <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>

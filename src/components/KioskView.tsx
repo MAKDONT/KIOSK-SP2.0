@@ -414,12 +414,6 @@ export default function KioskView() {
                         </div>
                       </div>
                       
-                      {timeRange && (
-                        <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--clay-text-secondary)' }}>
-                          <Calendar className="w-4 h-4" />
-                          Available for advance booking
-                        </div>
-                      )}
 
                       {/* Expanded Weekly Schedule */}
                       {expandedFaculty === f.id && (

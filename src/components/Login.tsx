@@ -31,6 +31,8 @@ interface LiveQueueItem {
   student_name: string;
   student_number: string;
   time_period?: string | null;
+  meet_link?: string | null;
+  consultation_date_display?: string | null;
 }
 
 export default function Login() {
@@ -188,17 +190,36 @@ export default function Login() {
 
           return queueData
             .filter((item: any) => ["waiting", "serving"].includes(item.status))
-            .map((item: any) => ({
-              id: Number(item.id),
-              status: item.status as LiveQueueItem["status"],
-              created_at: item.created_at,
-              faculty_id: f.id,
-              faculty_name: f.name || "Unknown Faculty",
-              student_name: item.student_name || "Unknown Student",
-              student_number: item.student_number || "",
-              time_period: item.time_period || null,
-              meet_link: item.meet_link || null,
-            }));
+            .map((item: any) => {
+              // Format consultation date
+              let consultation_date_display = undefined;
+              if (item.queue_date) {
+                try {
+                  const dateObj = new Date(item.queue_date);
+                  const formatter = new Intl.DateTimeFormat("en-US", {
+                    weekday: "long",
+                    month: "short",
+                    day: "numeric"
+                  });
+                  consultation_date_display = formatter.format(dateObj);
+                } catch (e) {
+                  consultation_date_display = item.queue_date;
+                }
+              }
+              
+              return {
+                id: Number(item.id),
+                status: item.status as LiveQueueItem["status"],
+                created_at: item.created_at,
+                faculty_id: f.id,
+                faculty_name: f.name || "Unknown Faculty",
+                student_name: item.student_name || "Unknown Student",
+                student_number: item.student_number || "",
+                time_period: item.time_period || null,
+                meet_link: item.meet_link || null,
+                consultation_date_display
+              };
+            });
         } catch {
           return [];
         }
@@ -629,6 +650,7 @@ export default function Login() {
                     }}>
                       <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                      {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{item.time_period || 'Walk-in'}</strong></p>
                     </div>
                   ))}
@@ -650,6 +672,7 @@ export default function Login() {
                     }}>
                       <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                      {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{item.time_period || 'Walk-in'}</strong></p>
                     </div>
                   ))}

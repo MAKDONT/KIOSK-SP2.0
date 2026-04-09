@@ -568,7 +568,7 @@ export default function FacultyDashboard() {
     }
   };
 
-  const startAudioRecording = async (recordingContext: RecordingContext | null) => {
+  const startAudioRecording = async (recordingContext: RecordingContext | null, onDisplayStreamSelected?: () => void) => {
     cleanupRecordingResources();
     discardRecordingOnStopRef.current = false;
     recordingContextRef.current = recordingContext;
@@ -589,6 +589,11 @@ export default function FacultyDashboard() {
         video: true,
       });
       displayStreamRef.current = displayStream;
+
+      // RIGHT AFTER user clicks Share/selects display, open the Google Meet tab
+      if (onDisplayStreamSelected) {
+        onDisplayStreamSelected();
+      }
 
       const audioContext = new AudioContext();
       mixedAudioContextRef.current = audioContext;
@@ -836,20 +841,32 @@ export default function FacultyDashboard() {
       // Step 0: Request audio recording permission before starting consultation
       await requestAudioPermission();
 
+      // Step 1: Create Google Meet link
       if (!finalLink) {
         finalLink = await createMeetLink(id);
       }
 
-      const sessionWindow = window.open(finalLink, "_blank");
-      if (!sessionWindow) {
-        throw new Error("Popup was blocked. Allow popups so Google Meet can open before recording starts.");
+      // Step 2: Open a blank tab but DON'T switch focus to it
+      const blankTab = window.open("about:blank", "_blank");
+      if (!blankTab) {
+        throw new Error("Popup was blocked. Please allow popups to continue.");
       }
-      sessionWindowRef.current = sessionWindow;
+      sessionWindowRef.current = blankTab;
+      
+      // Keep focus on this dashboard window (don't switch to the blank tab)
+      window.focus();
 
-      // Step 1: Start audio recording first so cancelling share does not create a serving session.
-      await startAudioRecording(recordingContext);
+      // Step 3: Start audio recording (screen share dialog appears while you're still on dashboard)
+      // User will select the blank tab from the dialog and click Share
+      await startAudioRecording(recordingContext, () => {
+        // After user clicks Share, convert the blank tab to Google Meet
+        if (sessionWindowRef.current && !sessionWindowRef.current.closed) {
+          sessionWindowRef.current.location.href = finalLink;
+          sessionWindowRef.current.focus();
+        }
+      });
 
-      // Step 2: Mark the consultation as started only after audio capture succeeds.
+      // Step 3: Mark the consultation as started only after audio capture succeeds.
       const data = await updateStatus(id, "serving", finalLink || undefined, false, true);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 

@@ -14,6 +14,7 @@ interface LiveQueueItem {
   student_number: string;
   time_period?: string | null;
   meet_link?: string | null;
+  consultation_date_display?: string | null;
 }
 
 interface DriveRecording {
@@ -1400,6 +1401,7 @@ export default function AdminDashboard() {
                         </div>
                         <p className="text-sm text-neutral-600">Student Number: {item.student_number || "N/A"}</p>
                         <p className="text-xs text-neutral-500 mt-1">Faculty: {item.faculty_name}</p>
+                        {item.consultation_date_display && <p className="text-xs text-neutral-500">Date: {item.consultation_date_display}</p>}
                         <p className="text-xs text-neutral-500">Slot: {item.time_period || "Walk-in / No slot"}</p>
                       </div>
                     ))
@@ -1418,6 +1420,7 @@ export default function AdminDashboard() {
                         <p className="font-semibold text-neutral-900">{item.student_name}</p>
                         <p className="text-sm text-neutral-600">Student Number: {item.student_number || "N/A"}</p>
                         <p className="text-xs text-neutral-500 mt-1">Faculty: {item.faculty_name}</p>
+                        {item.consultation_date_display && <p className="text-xs text-neutral-500">Date: {item.consultation_date_display}</p>}
                         <p className="text-xs text-neutral-500">Slot: {item.time_period || "Walk-in / No slot"}</p>
                       </div>
                     ))

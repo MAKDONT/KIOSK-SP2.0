@@ -59,11 +59,21 @@ export function WeeklySchedule({
       
       setSchedule(data);
       
-      // Set active day to first available day with slots
-      const firstDayWithSlots = data.findIndex((d: DaySchedule) => d.slots.length > 0);
-      console.log(`[DEBUG] First day with slots: ${firstDayWithSlots}`);
-      if (firstDayWithSlots >= 0) {
-        setActiveDay(firstDayWithSlots);
+      // Set active day to first day with available (non-past) slots
+      const firstAvailableDay = data.findIndex((d: DaySchedule) => 
+        d.slots.length > 0 && d.slots.some((slot: ScheduleSlot) => !slot.isPast)
+      );
+      console.log(`[DEBUG] First day with available (non-past) slots: ${firstAvailableDay}`);
+      
+      if (firstAvailableDay >= 0) {
+        setActiveDay(firstAvailableDay);
+      } else {
+        // If all slots are past, show the first day with any slots
+        const firstDayWithSlots = data.findIndex((d: DaySchedule) => d.slots.length > 0);
+        console.log(`[DEBUG] Fallback - first day with any slots: ${firstDayWithSlots}`);
+        if (firstDayWithSlots >= 0) {
+          setActiveDay(firstDayWithSlots);
+        }
       }
     } catch (err: any) {
       setError(err.message);
@@ -124,6 +134,11 @@ export function WeeklySchedule({
     return selectedSlot?.date === currentDay.date && selectedSlot?.timeString === slot.timeString;
   };
 
+  const isDayAllPast = (day: DaySchedule) => {
+    if (day.slots.length === 0) return true;
+    return day.slots.every((slot) => slot.isPast);
+  };
+
   return (
     <div className="w-full space-y-6">
       {/* Day Navigation */}
@@ -142,30 +157,34 @@ export function WeeklySchedule({
 
         <div className="flex-1 overflow-x-auto">
           <div className="flex gap-2 pb-2">
-            {schedule.map((day, idx) => (
+            {schedule.map((day, idx) => {
+              const isAllPast = isDayAllPast(day);
+              return (
               <button
                 key={idx}
                 onClick={(e) => {
                   e.stopPropagation();
                   setActiveDay(idx);
                 }}
-                disabled={day.slots.length === 0}
+                disabled={isAllPast}
                 className={`px-4 py-3 rounded-xl whitespace-nowrap font-medium transition-all flex-shrink-0 ${
                   activeDay === idx
                     ? "shadow-md"
                     : "opacity-75 hover:opacity-100"
-                } ${day.slots.length === 0 ? "opacity-50 cursor-not-allowed" : ""}`}
+                } ${isAllPast ? "opacity-40 cursor-not-allowed" : ""}`}
                 style={{
                   background:
                     activeDay === idx
                       ? "var(--clay-accent-warm)"
-                      : day.slots.length === 0
+                      : isAllPast
                         ? "var(--clay-bg-tertiary)"
                         : "var(--clay-bg-secondary)",
                   color:
                     activeDay === idx
                       ? "white"
-                      : "var(--clay-text-secondary)",
+                      : isAllPast
+                        ? "var(--clay-text-secondary)"
+                        : "var(--clay-text-secondary)",
                 }}
               >
                 <div className="text-xs" style={{ opacity: 0.9 }}>
@@ -175,7 +194,8 @@ export function WeeklySchedule({
                   {formatDate(day.date)}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -194,11 +214,18 @@ export function WeeklySchedule({
 
       {/* Time Slots */}
       <div className="rounded-2xl p-6 card space-y-3">
-        <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5" style={{ color: "var(--clay-accent-warm)" }} />
-          <h3 className="text-lg font-bold" style={{ color: "var(--clay-text-primary)" }}>
-            {currentDay.day}, {formatDate(currentDay.date)}
-          </h3>
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2">
+            <Clock className="w-5 h-5" style={{ color: isDayAllPast(currentDay) ? "var(--clay-text-secondary)" : "var(--clay-accent-warm)" }} />
+            <h3 className="text-lg font-bold" style={{ color: isDayAllPast(currentDay) ? "var(--clay-text-secondary)" : "var(--clay-text-primary)", opacity: isDayAllPast(currentDay) ? 0.5 : 1 }}>
+              {currentDay.day}, {formatDate(currentDay.date)}
+            </h3>
+          </div>
+          {isDayAllPast(currentDay) && (
+            <span className="px-2 py-1 rounded text-xs font-semibold" style={{ background: "var(--clay-bg-tertiary)", color: "var(--clay-text-secondary)" }}>
+              All Slots Past
+            </span>
+          )}
         </div>
 
         {currentDay.slots.length === 0 ? (
@@ -268,9 +295,6 @@ export function WeeklySchedule({
                   }}
                 >
                   <span className="text-sm">{slot.timeString.split(" - ")[0]}</span>
-                  {isPast && (
-                    <div className="absolute top-1 right-1 text-xs opacity-60">Past</div>
-                  )}
                   {isBooked && !isPast && (
                     <div className="absolute inset-0 flex items-center justify-center rounded-xl">
                       <Check className="w-4 h-4 opacity-60" />
