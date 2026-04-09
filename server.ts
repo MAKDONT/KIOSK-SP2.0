@@ -604,6 +604,14 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
   const server = http.createServer(app);
+  
+  // --- NODE.JS TIMEOUT TUNING FOR RENDER ---
+  // Prevent "Connection reset by peer" errors on Render's load balancer
+  // These timeouts must be long enough for slow queries/uploads but shorter than Render's limits
+  server.keepAliveTimeout = 120000;     // 120 seconds (Render LB timeout ~65s, so 120s gives buffer)
+  server.headersTimeout = 125000;       // 125 seconds (slightly longer than keepAliveTimeout)
+  server.requestTimeout = 125000;       // 125 seconds (explicit request timeout)
+  
   const wss = new WebSocketServer({ server });
 
   // WebSocket connection handler
@@ -5515,7 +5523,13 @@ async function startServer() {
   await initializeAdminEmail();
 
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`🔧 Node.js Timeouts (for Render compatibility):`);
+    console.log(`   - keepAliveTimeout: ${server.keepAliveTimeout}ms`);
+    console.log(`   - headersTimeout: ${server.headersTimeout}ms`);
+    console.log(`   - requestTimeout: ${server.requestTimeout}ms`);
+    console.log(`${'='.repeat(60)}\n`);
   });
 
   // Graceful shutdown for Render deployments
