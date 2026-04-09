@@ -195,10 +195,33 @@ const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
   if (!availabilitySlots || availabilitySlots.length === 0) return false;
 
   const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const today = new Date();
+  
+  // Get current date in APP_TIMEZONE (Asia/Manila for Render compatibility)
+  const getDateInTimezone = (date: Date) => {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.format(date).split("-");
+    return new Date(parts[0] + "-" + parts[1] + "-" + parts[2] + "T00:00:00");
+  };
+
+  const getDayOfWeekInTimezone = (date: Date) => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: APP_TIMEZONE,
+      weekday: "long",
+    });
+    const dayName = formatter.format(date);
+    return daysOfWeek.indexOf(dayName);
+  };
+  
+  const todayUTC = new Date();
+  const today = getDateInTimezone(todayUTC);
+  const todayDay = getDayOfWeekInTimezone(todayUTC);
 
   // Find next Monday
-  const todayDay = today.getDay();
   let daysUntilMonday = 0;
 
   if (todayDay === 0) {
@@ -209,12 +232,11 @@ const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
     daysUntilMonday = 8 - todayDay;
   }
 
-  const now = new Date();
-
   // Check next 5 days (Mon-Fri)
   for (let i = 0; i < 5; i++) {
-    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday + i);
-    const day = daysOfWeek[date.getDay()];
+    const date = new Date(today);
+    date.setDate(date.getDate() + daysUntilMonday + i);
+    const day = daysOfWeek[getDayOfWeekInTimezone(date)];
 
     // Check if this day has scheduled slots
     const daySlots = availabilitySlots.filter((slot: any) => slot.day === day);
@@ -233,7 +255,7 @@ const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
       const slotEnd = new Date(date);
       slotEnd.setHours(endHour, endMin, 0, 0);
 
-      if (slotEnd > now) {
+      if (slotEnd > todayUTC) {
         return true; // Has at least one available slot
       }
     }
@@ -3259,8 +3281,31 @@ async function startServer() {
 
       // Generate schedule for current week (Mon-Fri), showing from Monday to today
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      const today = new Date();
-      const todayDay = today.getDay();
+      
+      // Get current date in APP_TIMEZONE (Asia/Manila for Render compatibility)
+      const getDateInTimezone = (date: Date) => {
+        const formatter = new Intl.DateTimeFormat("en-CA", {
+          timeZone: APP_TIMEZONE,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        const parts = formatter.format(date).split("-");
+        return new Date(parts[0] + "-" + parts[1] + "-" + parts[2] + "T00:00:00");
+      };
+
+      const getDayOfWeekInTimezone = (date: Date) => {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: APP_TIMEZONE,
+          weekday: "long",
+        });
+        const dayName = formatter.format(date);
+        return daysOfWeek.indexOf(dayName);
+      };
+
+      const todayUTC = new Date();
+      const today = getDateInTimezone(todayUTC);
+      const todayDay = getDayOfWeekInTimezone(todayUTC);
       
       // If today is weekend (Sat/Sun), show current week Mon-Fri
       // If today is weekday (Mon-Fri), show Mon through today
@@ -3279,13 +3324,15 @@ async function startServer() {
         daysToMonday = -(todayDay - 1);
       }
       
-      // Get Monday date
-      const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysToMonday);
+      // Get Monday date (in timezone-aware manner)
+      const monday = new Date(today);
+      monday.setDate(monday.getDate() + daysToMonday);
       
       // Collect dates from Monday to today (or Friday if today is weekend)
       const endDay = todayDay === 0 || todayDay === 6 ? 5 : todayDay; // If weekend, show through Friday; otherwise show through today
       for (let i = 0; i < endDay; i++) {
-        const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+        const date = new Date(monday);
+        date.setDate(date.getDate() + i);
         datesToShow.push(date);
       }
       
@@ -3295,8 +3342,8 @@ async function startServer() {
       for (let i = 0; i < datesToShow.length; i++) {
         const date = datesToShow[i];
         
-        const day = daysOfWeek[date.getDay()];
-        // Format date as YYYY-MM-DD using local date
+        const day = daysOfWeek[getDayOfWeekInTimezone(new Date(date.getTime()))];
+        // Format date as YYYY-MM-DD
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const dateNum = String(date.getDate()).padStart(2, '0');
@@ -3331,15 +3378,14 @@ async function startServer() {
           const end = new Date(date);
           end.setHours(endHour, endMin, 0, 0);
 
-          const now = new Date();
-
           while (current < end) {
             const slotStart = new Date(current);
             const slotEnd = new Date(current.getTime() + 15 * 60000);
 
             if (slotEnd > end) break;
 
-            const isPast = slotStart < now;
+            // Compare with current UTC time
+            const isPast = slotStart < todayUTC;
             const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
 
             daySchedule.slots.push({
@@ -3968,6 +4014,19 @@ async function startServer() {
       const now = new Date();
       const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       
+      // Get current day in APP_TIMEZONE
+      const getDayOfWeekInTimezone = (date: Date) => {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: APP_TIMEZONE,
+          weekday: "long",
+        });
+        const dayName = formatter.format(date);
+        return days.indexOf(dayName);
+      };
+      
+      const todayDayIndex = getDayOfWeekInTimezone(now);
+      const todayName = days[todayDayIndex];
+      
       for (const item of waitingQueue) {
         if (!item.meet_link) continue;
         const parts = item.meet_link.split('|');
@@ -3980,7 +4039,6 @@ async function startServer() {
         
         if (dayMatch) {
           const dayName = dayMatch[1];
-          const todayName = days[now.getDay()];
           
           if (dayName.toLowerCase() === todayName.toLowerCase()) {
             const timeMatch = time_period.match(/-\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
