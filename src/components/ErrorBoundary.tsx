@@ -1,4 +1,4 @@
-import React, { Component, ReactNode, ErrorInfo } from "react";
+﻿import React, { Component, ReactNode, ErrorInfo } from "react";
 import { AlertTriangle } from "lucide-react";
 
 interface ErrorBoundaryProps {
@@ -30,7 +30,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Error caught by boundary:", error, errorInfo);
   }
 
   render() {
@@ -73,3 +72,4 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return this.props.children;
   }
 }
+

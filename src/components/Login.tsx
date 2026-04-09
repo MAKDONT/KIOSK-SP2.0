@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
 
@@ -75,16 +75,13 @@ export default function Login() {
           fetchLiveQueue(1, true);
         }
       } catch (err) {
-        console.error("Login WS message parse error", err);
       }
     };
 
     ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
     };
 
     ws.onclose = () => {
-      console.warn("WebSocket connection closed");
     };
 
     const interval = setInterval(() => {
@@ -103,11 +100,9 @@ export default function Login() {
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
-        console.log(`[DEBUG] Login.tsx - Fetched ${data.length} faculty members`);
         setFaculty(data);
       }
     } catch (err) {
-      console.error("Failed to fetch faculty", err);
       if (retries > 0) {
         setTimeout(() => fetchFaculty(retries - 1), 2000);
       }
@@ -123,7 +118,6 @@ export default function Login() {
         setDepartments(data);
       }
     } catch (err) {
-      console.error("Failed to fetch departments", err);
       if (retries > 0) {
         setTimeout(() => fetchDepartments(retries - 1), 2000);
       }
@@ -146,12 +140,10 @@ export default function Login() {
         throw new Error("Queue monitor payload is not an array");
       }
     } catch (err) {
-      console.error("Failed to fetch live queue", err);
       try {
         const legacy = await fetchLegacyLiveQueue();
         setLiveQueue(legacy);
       } catch (legacyErr) {
-        console.error("Fallback live queue fetch failed", legacyErr);
         if (retries > 0) {
           setTimeout(() => fetchLiveQueue(retries - 1, silent), 2000);
         }
@@ -716,3 +708,4 @@ export default function Login() {
     </div>
   );
 }
+

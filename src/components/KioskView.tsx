@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { User, Users, CheckCircle, AlertCircle, Clock, ArrowLeft, Calendar, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -60,7 +60,6 @@ export default function KioskView() {
           fetchBookedSlots();
         }
       } catch (err) {
-        console.error("Kiosk WS message parse error", err);
       }
     };
 
@@ -85,7 +84,6 @@ export default function KioskView() {
         setBookedSlots(data);
       }
     } catch (err) {
-      console.error("Failed to fetch booked slots", err);
       if (retries > 0) {
         setTimeout(() => fetchBookedSlots(retries - 1), 2000);
       }
@@ -98,16 +96,12 @@ export default function KioskView() {
       const res = await fetch("/api/faculty");
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
-      console.log(`[DEBUG] Fetched faculty data:`, data);
       if (Array.isArray(data)) {
-        console.log(`[DEBUG] Faculty is array with ${data.length} items`);
         setFaculty(data);
       } else {
-        console.error("Failed to fetch faculty: Not an array", data);
-        console.log(`[DEBUG] Data type: ${typeof data}, keys: ${Object.keys(data)}`);
+
       }
     } catch (err) {
-      console.error("Failed to fetch faculty", err);
       if (retries > 0) {
         setTimeout(() => fetchFaculty(retries - 1), 2000);
       }
@@ -204,16 +198,12 @@ export default function KioskView() {
   };
 
   const handleJoinQueue = async () => {
-    console.log(`[DEBUG] handleJoinQueue called: studentId=${studentId}, selectedFaculty=${selectedFaculty}, selectedTimePeriod=${selectedTimePeriod}, concern=${consultationConcern}`);
-    
     if (!studentId || !selectedFaculty || !selectedTimePeriod) {
       setError("Please select a faculty member and choose a time slot.");
-      console.log(`[DEBUG] Missing required fields: studentId=${!!studentId}, selectedFaculty=${!!selectedFaculty}, selectedTimePeriod=${!!selectedTimePeriod}`);
       return;
     }
     if (!consultationConcern.trim()) {
       setError("Please provide your consultation concern before confirming.");
-      console.log(`[DEBUG] Consultation concern is empty`);
       return;
     }
 
@@ -221,7 +211,6 @@ export default function KioskView() {
     setError("");
 
     try {
-      console.log(`[DEBUG] Sending join queue request with: faculty_id=${selectedFaculty}, time_period=${selectedTimePeriod}`);
       const res = await fetch("/api/queue/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -242,14 +231,11 @@ export default function KioskView() {
       if (!res.ok) {
         throw new Error(data.error || "Failed to join queue");
       }
-
-      console.log(`[DEBUG] Successfully joined queue:`, data);
       setSuccess(data);
       setTimeout(() => {
         navigate(`/student/${data.id}`);
       }, 3000);
     } catch (err: any) {
-      console.error(`[ERROR] Failed to join queue:`, err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -279,17 +265,11 @@ export default function KioskView() {
         : JSON.parse(f.full_name || "[]");
       
       const hasSlotsToday = Array.isArray(parsed) && parsed.length > 0;
-      console.log(`[DEBUG] Faculty ${f.name}: full_name type=${typeof f.full_name}, is_array=${Array.isArray(f.full_name)}, parsed_length=${parsed.length}, has_slots=${hasSlotsToday}`);
-      
       return hasSlotsToday;
     } catch (err) {
-      console.error(`[ERROR] Failed to parse availability for ${f.name}:`, err, f.full_name);
       return false;
     }
   });
-  
-  console.log(`[DEBUG] Total faculty: ${faculty.length}, Available faculty: ${availableFaculty.length}`);
-
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
       {/* Header */}
@@ -428,11 +408,9 @@ export default function KioskView() {
                             bookedSlots={bookedSlots}
                             selectedSlot={selectedFaculty === f.id && selectedTimePeriod && selectedDate ? { date: selectedDate, timeString: selectedTimePeriod } : null}
                             onSlotSelect={(slot, date, day) => {
-                              console.log(`[DEBUG] KioskView.onSlotSelect called with slot: ${slot.timeString}, date: ${date}`);
                               setSelectedFaculty(f.id);
                               setSelectedTimePeriod(slot.timeString);
                               setSelectedDate(date);
-                              console.log(`[DEBUG] Selected faculty: ${f.id}, time period: ${slot.timeString}, date: ${date}`);
                             }}
                           />
                         </div>
@@ -485,3 +463,4 @@ export default function KioskView() {
     </div>
   );
 }
+

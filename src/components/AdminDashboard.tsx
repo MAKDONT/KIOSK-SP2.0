@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download, Mail, Eye, EyeOff, FileText } from "lucide-react";
 import { safeGetItem, safeClearStorage } from "../utils/storageUtils";
@@ -197,16 +197,13 @@ export default function AdminDashboard() {
           fetchLiveQueue(1, true);
         }
       } catch (err) {
-        console.error("Admin WS message parse error", err);
       }
     };
 
     ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
     };
 
     ws.onclose = () => {
-      console.warn("WebSocket connection closed");
     };
 
     const interval = setInterval(() => {
@@ -248,7 +245,6 @@ export default function AdminDashboard() {
       setOauthExpiresAt(typeof data.oauthExpiresAt === "string" ? data.oauthExpiresAt : null);
       setTokenMaxAgeDays(typeof data.tokenMaxAgeDays === "number" ? data.tokenMaxAgeDays : 30);
     } catch (err) {
-      console.error("Failed to check drive status", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -267,7 +263,6 @@ export default function AdminDashboard() {
       }
       return ready;
     } catch (err) {
-      console.error("Failed to check recording storage status", err);
       setRecordingStorageReady(false);
       setDriveRecordingsError(err instanceof Error ? err.message : "Supabase recording storage is unavailable.");
       return false;
@@ -300,7 +295,6 @@ export default function AdminDashboard() {
         return mergedFiles[0]?.id || null;
       });
     } catch (err) {
-      console.error("Failed to fetch consultation recordings", err);
       setDriveRecordingsError(err instanceof Error ? err.message : "Failed to load consultation recordings.");
     } finally {
       setDriveRecordingsLoading(false);
@@ -323,12 +317,10 @@ export default function AdminDashboard() {
         throw new Error("Queue monitor payload is not an array");
       }
     } catch (err) {
-      console.error("Failed to fetch live queue", err);
       try {
         const legacy = await fetchLegacyLiveQueue();
         setLiveQueue(legacy);
       } catch (legacyErr) {
-        console.error("Fallback live queue fetch failed", legacyErr);
         if (retries > 0) {
           setTimeout(() => fetchLiveQueue(retries - 1, silent), 2000);
         }
@@ -408,7 +400,6 @@ export default function AdminDashboard() {
         alert('Please allow popups for this site to connect your account.');
       }
     } catch (error) {
-      console.error('OAuth error:', error);
       alert('Failed to initiate Google connection.');
     }
   };
@@ -440,7 +431,6 @@ export default function AdminDashboard() {
       await checkDriveStatus();
       alert("Google OAuth disconnected successfully.");
     } catch (err) {
-      console.error("Failed to disconnect drive", err);
       alert("Failed to disconnect Google.");
     }
   };
@@ -454,7 +444,6 @@ export default function AdminDashboard() {
         setFaculties(data);
       }
     } catch (err) {
-      console.error(err);
       if (retries > 0) {
         setTimeout(() => fetchFaculties(retries - 1), 2000);
       }
@@ -473,7 +462,6 @@ export default function AdminDashboard() {
         }
       }
     } catch (err) {
-      console.error(err);
       if (retries > 0) {
         setTimeout(() => fetchColleges(retries - 1), 2000);
       }
@@ -489,7 +477,6 @@ export default function AdminDashboard() {
         setDepartments(data);
       }
     } catch (err) {
-      console.error(err);
       if (retries > 0) {
         setTimeout(() => fetchDepartments(retries - 1), 2000);
       }
@@ -537,7 +524,6 @@ export default function AdminDashboard() {
       fetchColleges();
       alert("College added successfully");
     } catch (err: any) {
-      console.error(err);
       setCreateCollegePasswordError(err.message);
     } finally {
       setAddingCollege(false);
@@ -590,7 +576,6 @@ export default function AdminDashboard() {
       fetchDepartments();
       alert("Department added successfully");
     } catch (err: any) {
-      console.error(err);
       setCreateDeptPasswordError(err.message);
     } finally {
       setAddingDept(false);
@@ -672,7 +657,6 @@ export default function AdminDashboard() {
       fetchFaculties();
       alert("Faculty added successfully");
     } catch (err: any) {
-      console.error(err);
       setCreateFacPasswordError(err.message);
     } finally {
       setAddingFac(false);
@@ -686,7 +670,6 @@ export default function AdminDashboard() {
         credentials: "include",
       });
     } catch (err) {
-      console.error("Logout API error:", err);
     } finally {
       safeClearStorage();
       navigate("/admin/login");
@@ -1248,7 +1231,7 @@ export default function AdminDashboard() {
               </span>
             ) : oauthExpired ? (
               <span className="px-3 py-1.5 bg-amber-50 text-amber-700 text-sm font-medium rounded-lg border border-amber-100">
-                Google Expired — Reconnect
+                Google Expired â€” Reconnect
               </span>
             ) : driveMode === "service_account" ? (
               <span className="px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-medium rounded-lg border border-blue-100">
@@ -3136,3 +3119,4 @@ export default function AdminDashboard() {
     </div>
   );
 }
+

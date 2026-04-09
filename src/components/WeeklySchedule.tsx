@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight, Clock, Check } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -47,13 +47,9 @@ export function WeeklySchedule({
       if (!res.ok) throw new Error("Failed to fetch schedule");
       
       const data = await res.json();
-      console.log(`[DEBUG] Weekly schedule fetched for faculty ${facultyId}:`, data);
-      
       // Log each day and its slots
       data.forEach((day: DaySchedule, idx: number) => {
-        console.log(`[DEBUG] Day ${idx}: ${day.day} ${day.date} - ${day.slots.length} slots`);
         day.slots.forEach((slot: ScheduleSlot, slotIdx: number) => {
-          console.log(`  [DEBUG] Slot ${slotIdx}: ${slot.timeString}, isPast=${slot.isPast}`);
         });
       });
       
@@ -63,21 +59,17 @@ export function WeeklySchedule({
       const firstAvailableDay = data.findIndex((d: DaySchedule) => 
         d.slots.length > 0 && d.slots.some((slot: ScheduleSlot) => !slot.isPast)
       );
-      console.log(`[DEBUG] First day with available (non-past) slots: ${firstAvailableDay}`);
-      
       if (firstAvailableDay >= 0) {
         setActiveDay(firstAvailableDay);
       } else {
         // If all slots are past, show the first day with any slots
         const firstDayWithSlots = data.findIndex((d: DaySchedule) => d.slots.length > 0);
-        console.log(`[DEBUG] Fallback - first day with any slots: ${firstDayWithSlots}`);
         if (firstDayWithSlots >= 0) {
           setActiveDay(firstDayWithSlots);
         }
       }
     } catch (err: any) {
       setError(err.message);
-      console.error("Weekly schedule fetch error:", err);
     } finally {
       setLoading(false);
     }
@@ -240,13 +232,12 @@ export function WeeklySchedule({
               const isPast = slot.isPast;
               
               if (idx === 0) {
-                console.log(`[DEBUG] Rendering first slot for ${currentDay.day}:`);
-                console.log(`  slot.timeString: ${slot.timeString}`);
-                console.log(`  isBooked: ${isBooked}`);
-                console.log(`  isPast: ${isPast}`);
-                console.log(`  isSelected: ${isSelected}`);
-                console.log(`  disabled will be: ${isBooked || isPast}`);
-                console.log(`  canClick: ${!isBooked && !isPast}`);
+
+
+
+
+
+
               }
 
               return (
@@ -254,13 +245,10 @@ export function WeeklySchedule({
                   key={idx}
                   onClick={(e) => {
                     e.stopPropagation();
-                    console.log(`[DEBUG] Clicked slot ${idx}: ${slot.timeString}`);
-                    console.log(`  isBooked=${isBooked}, isPast=${isPast}, canClick=${!isBooked && !isPast}`);
+
                     if (!isBooked && !isPast) {
-                      console.log(`[DEBUG] CALLING onSlotSelect for: ${slot.timeString}`);
                       onSlotSelect(slot, currentDay.date, currentDay.day);
                     } else {
-                      console.log(`[DEBUG] BLOCKED - isBooked=${isBooked}, isPast=${isPast}`);
                     }
                   }}
                   disabled={isBooked || isPast}
@@ -337,3 +325,4 @@ export function WeeklySchedule({
 }
 
 export default WeeklySchedule;
+

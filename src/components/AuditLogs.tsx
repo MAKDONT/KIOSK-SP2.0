@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Download, RotateCw, AlertCircle } from "lucide-react";
 
 interface SystemLog {
@@ -39,11 +39,9 @@ export default function AuditLogs() {
         throw new Error(errData.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      console.log("[AuditLogs] Received data:", data);
       setLogs(data.logs || []);
       setTotal(data.total || 0);
     } catch (err: any) {
-      console.error("[AuditLogs] Fetch error:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -82,7 +80,6 @@ export default function AuditLogs() {
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("CSV export failed:", err);
       alert("Failed to export CSV");
     } finally {
       setExporting(null);
@@ -214,3 +211,4 @@ export default function AuditLogs() {
     </div>
   );
 }
+

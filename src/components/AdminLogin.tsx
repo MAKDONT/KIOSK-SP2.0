@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type FormEvent } from "react";
+﻿import { useEffect, useState, useRef, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, LogIn, Shield, KeyRound, Mail, Eye, EyeOff } from "lucide-react";
 import { safeGetItem } from "../utils/storageUtils";
@@ -32,7 +32,6 @@ export default function AdminLogin() {
           localStorage.removeItem("user_role");
         }
       } catch (err) {
-        console.error("Session verification failed:", err);
         localStorage.removeItem("user_role");
       }
     };
@@ -378,3 +377,4 @@ export default function AdminLogin() {
     </div>
   );
 }
+

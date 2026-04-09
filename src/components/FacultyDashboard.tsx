@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
@@ -127,20 +127,13 @@ export default function FacultyDashboard() {
     source.connect(audioContext.destination);
     source.start(0);
 
-    console.log("🔔 Consultation starting notification!");
-    console.log(
-      `   Student: ${data.student_name}`,
-      `\n   Time: ${data.time_slot}`,
-      `\n   In ${data.minutes_until_start} minutes`
-    );
-
     // Show browser notification if permission granted
     if ("Notification" in window && Notification.permission === "granted") {
-      const notification = new Notification("🔔 Consultation Starting Soon!", {
+      const notification = new Notification("ðŸ”” Consultation Starting Soon!", {
         body: `${data.student_name} - ${data.time_slot}\nJoining in ${data.minutes_until_start} minutes`,
         tag: `consultation-${data.consultation_id}`,
         requireInteraction: true,
-        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%234F46E5'/><text x='50' y='65' font-size='60' fill='white' text-anchor='middle'>🔔</text></svg>"
+        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%234F46E5'/><text x='50' y='65' font-size='60' fill='white' text-anchor='middle'>ðŸ””</text></svg>"
       });
       
       // Auto-close after 10 seconds
@@ -195,7 +188,7 @@ export default function FacultyDashboard() {
             fetchFaculty();
           }
           if (data.type === "consultation_starting_soon" && data.payload.faculty_id === selectedFaculty) {
-            console.log("📢 Consultation starting soon notification:", data.payload);
+
             // Show modal alert
             setConsultationAlert({
               consultation_id: data.payload.consultation_id,
@@ -208,7 +201,7 @@ export default function FacultyDashboard() {
             playNotificationSound(data.payload);
           }
         } catch (err) {
-          console.error("Faculty WS message parse error", err);
+          // Error parsing WS message
         }
       };
 
@@ -275,11 +268,9 @@ export default function FacultyDashboard() {
       const data = await res.json();
       if (Array.isArray(data)) {
         setFaculty(data);
-      } else {
-        console.error("Failed to fetch faculty: Not an array", data);
       }
     } catch (err) {
-      console.error("Failed to fetch faculty", err);
+      // Error fetching faculty
       if (retries > 0) {
         setTimeout(() => fetchFaculty(retries - 1), 2000);
       }
@@ -293,11 +284,9 @@ export default function FacultyDashboard() {
       const data = await res.json();
       if (Array.isArray(data)) {
         setQueue(data);
-      } else {
-        console.error("Failed to fetch queue: Not an array", data);
       }
     } catch (err) {
-      console.error("Failed to fetch queue", err);
+      // Error fetching queue
       if (retries > 0) {
         setTimeout(() => fetchQueue(retries - 1), 2000);
       }
@@ -332,7 +321,7 @@ export default function FacultyDashboard() {
       setGoogleMeetEmail(typeof data.email === "string" ? data.email : null);
       setGoogleMeetConnectedAt(typeof data.connectedAt === "string" ? data.connectedAt : null);
     } catch (err) {
-      console.error("Failed to fetch faculty Google Meet status", err);
+      // Error fetching Google Meet status
       setGoogleMeetConnected(false);
       setGoogleMeetMode("none");
       setGoogleMeetEmail(null);
@@ -351,7 +340,7 @@ export default function FacultyDashboard() {
       setRecordingStorageReady(ready);
       return ready;
     } catch (err) {
-      console.error("Failed to check recording storage status", err);
+      // Error checking recording storage
       setRecordingStorageReady(false);
       return false;
     }
@@ -380,7 +369,7 @@ export default function FacultyDashboard() {
         alert("Please allow popups for this site to connect your Google account.");
       }
     } catch (err) {
-      console.error("Faculty Google connect error", err);
+      // Error connecting to Google
       alert(err instanceof Error ? err.message : "Failed to connect Google Meet.");
     } finally {
       setGoogleMeetLoading(false);
@@ -404,7 +393,7 @@ export default function FacultyDashboard() {
 
       await fetchGoogleMeetStatus();
     } catch (err) {
-      console.error("Faculty Google disconnect error", err);
+      // Error disconnecting from Google
       alert(err instanceof Error ? err.message : "Failed to disconnect Google.");
     } finally {
       setGoogleMeetLoading(false);
@@ -484,7 +473,7 @@ export default function FacultyDashboard() {
         </main>
       `;
     } catch (err) {
-      console.warn("Failed to render Meet placeholder tab", err);
+      // Error rendering Meet placeholder
     }
 
     sessionWindow.blur();
@@ -560,7 +549,7 @@ export default function FacultyDashboard() {
       }
       setRecordingStorageReady(true);
     } catch (err) {
-      console.error("Failed to upload recording", err);
+      // Error uploading recording
       const message = err instanceof Error ? err.message : "Failed to save to Supabase Storage.";
       alert(message);
     } finally {
@@ -662,7 +651,7 @@ export default function FacultyDashboard() {
         track.onended = stopRecorderIfActive;
       });
 
-      // Only listen on audio tracks — video tracks from getDisplayMedia can end when
+      // Only listen on audio tracks â€” video tracks from getDisplayMedia can end when
       // the faculty tab goes to background (user switches to Google Meet tab) and
       // should NOT stop the audio recording.
       displayStream?.getAudioTracks().forEach((track) => {
@@ -671,7 +660,6 @@ export default function FacultyDashboard() {
     } catch (err) {
       recordingContextRef.current = null;
       cleanupRecordingResources();
-      console.error("Error starting audio recording:", err);
       const message = err instanceof Error
         ? err.message
         : "Could not start audio recording.";
@@ -720,7 +708,6 @@ export default function FacultyDashboard() {
       const payload = await res.json();
       
       if (!res.ok) {
-        console.error("Failed to update status:", payload);
         const error = new Error(payload.error || "Failed to update consultation status.") as Error & {
           meetRequired?: boolean;
           recordingRequired?: boolean;
@@ -742,7 +729,6 @@ export default function FacultyDashboard() {
       fetchQueue();
       return payload as { success: boolean; meet_link?: string | null };
     } catch (err) {
-      console.error("Failed to update status", err);
       throw err instanceof Error ? err : new Error("Failed to update consultation status.");
     }
   };
@@ -791,7 +777,7 @@ export default function FacultyDashboard() {
       setShowAudioPermissionModal(false);
       audioPermissionCallback?.(true);
     } catch (err) {
-      console.error("Microphone permission denied:", err);
+      // Microphone permission error
       setAudioPermissionError("Audio recording is mandatory. Please allow microphone access to continue.");
     }
   };
@@ -915,7 +901,6 @@ export default function FacultyDashboard() {
       });
       fetchFaculty();
     } catch (err) {
-      console.error("Failed to update status", err);
     }
   };
 
@@ -963,7 +948,6 @@ export default function FacultyDashboard() {
       setShowAvailabilityModal(false);
       fetchFaculty();
     } catch (err: any) {
-      console.error("Failed to save availability", err);
       alert(`Error saving availability: ${err.message}`);
     }
   };
@@ -1043,7 +1027,6 @@ export default function FacultyDashboard() {
       closePasswordModal();
       alert("Password updated successfully!");
     } catch (err: any) {
-      console.error("Failed to save password", err);
       setPasswordError("Network error. Please try again.");
     } finally {
       setPasswordSaving(false);
@@ -1077,7 +1060,7 @@ export default function FacultyDashboard() {
             {/* Alert Header */}
             <div className="flex items-start gap-4">
               <div className="flex-shrink-0 w-14 h-14 bg-red-100 rounded-full flex items-center justify-center animate-pulse">
-                <span className="text-2xl">🔔</span>
+                <span className="text-2xl">ðŸ””</span>
               </div>
               <div className="flex-1">
                 <h2 className="text-2xl font-bold text-neutral-900">Consultation Starting!</h2>
@@ -1674,3 +1657,4 @@ export default function FacultyDashboard() {
     </div>
   );
 }
+
