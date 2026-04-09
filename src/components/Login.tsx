@@ -101,6 +101,7 @@ export default function Login() {
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
+        console.log(`[DEBUG] Login.tsx - Fetched ${data.length} faculty members`);
         setFaculty(data);
       }
     } catch (err) {
@@ -209,7 +210,11 @@ export default function Login() {
 
   const getTodayAvailabilitySlots = (f: Faculty): AvailabilitySlot[] => {
     try {
-      const parsed = JSON.parse(f.full_name || "[]");
+      // full_name can be either already-parsed array or JSON string
+      const parsed = Array.isArray(f.full_name) 
+        ? f.full_name 
+        : JSON.parse(f.full_name || "[]");
+      
       if (Array.isArray(parsed)) {
         const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         const todayDay = daysOfWeek[new Date().getDay()];
@@ -427,7 +432,7 @@ export default function Login() {
             <h1 className="text-5xl sm:text-6xl font-bold tracking-tight" style={{ color: 'var(--clay-text-primary)' }}>
               Welcome
             </h1>
-            <p className="text-2xl sm:text-3xl" style={{ color: 'var(--clay-text-secondary)' }}>Student Consultation Booking System</p>
+            <p className="text-2xl sm:text-3xl" style={{ color: 'var(--clay-text-secondary)' }}>Student Consultation System</p>
             {availableFaculty.length === 0 && (
               <p className="text-lg sm:text-xl font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
                  No faculty available right now
@@ -464,7 +469,7 @@ export default function Login() {
                     opacity: availableFaculty.length === 0 ? 0.5 : 1
                   }}
                 >
-                  <Keyboard className="w-7 h-7 sm:w-8 sm:h-8" /> Manual Input
+                  <Keyboard className="w-7 h-7 sm:w-8 sm:h-8" /> Register
                 </button>
               </div>
 
@@ -481,8 +486,13 @@ export default function Login() {
                   >
                     <ScanLine className="w-16 h-16 sm:w-20 sm:h-20 mb-3" />
                     <span className="text-xl sm:text-2xl font-bold">
-                      {availableFaculty.length === 0 ? "System Offline" : "Scan Your Student ID"}
+                      {availableFaculty.length === 0 ? "System Offline" : "Scan Barcode in Student ID "}
                     </span>
+                    {availableFaculty.length > 0 && (
+                      <span className="text-lg sm:text-xl" style={{ fontSize: '1rem', color: 'var(--clay-text-secondary)', marginTop: '0.1rem' }}>
+                        (use barcode scanner)
+                      </span>
+                    )}
                   </div>
 
                   <input
@@ -495,7 +505,7 @@ export default function Login() {
                       setIdentifier(e.target.value);
                     }}
                     disabled={availableFaculty.length === 0}
-                    placeholder="Or type and press Enter"
+                    placeholder="Or type your Student No. here"
                     className="w-full p-6 border-3 rounded-2xl outline-none transition-colors text-2xl font-semibold text-center"
                     style={{
                       borderColor: availableFaculty.length === 0 ? 'var(--clay-border)' : 'var(--clay-border)',

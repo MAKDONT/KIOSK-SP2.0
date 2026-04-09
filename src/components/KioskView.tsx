@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { User, Users, CheckCircle, AlertCircle, Clock, ArrowLeft, Calendar, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { safeGetItem } from "../utils/storageUtils";
+import { WeeklySchedule } from "./WeeklySchedule";
 
 interface Faculty {
   id: string;
@@ -30,6 +31,7 @@ export default function KioskView() {
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
   const [expandedFaculty, setExpandedFaculty] = useState<string | null>(null);
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
   const [consultationConcern, setConsultationConcern] = useState("");
   const [bookedSlots, setBookedSlots] = useState<{faculty_id: string, time_period: string}[]>([]);
@@ -96,10 +98,13 @@ export default function KioskView() {
       const res = await fetch("/api/faculty");
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
+      console.log(`[DEBUG] Fetched faculty data:`, data);
       if (Array.isArray(data)) {
+        console.log(`[DEBUG] Faculty is array with ${data.length} items`);
         setFaculty(data);
       } else {
         console.error("Failed to fetch faculty: Not an array", data);
+        console.log(`[DEBUG] Data type: ${typeof data}, keys: ${Object.keys(data)}`);
       }
     } catch (err) {
       console.error("Failed to fetch faculty", err);
@@ -124,25 +129,35 @@ export default function KioskView() {
       return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
     };
 
-    return todaySlots.map((slot) => `${formatTime(slot.start)} - ${formatTime(slot.end)}`).join(", ");
+    return todaySlots.map((slot) => {
+      const start = slot.start || (slot as any).start_time || '';
+      const end = slot.end || (slot as any).end_time || '';
+      return `${formatTime(start)} - ${formatTime(end)}`;
+    }).join(", ");
   };
 
   const getTodayAvailabilitySlots = (f: Faculty): AvailabilitySlot[] => {
     try {
-      const parsed = JSON.parse(f.full_name || "[]");
+      let parsed = Array.isArray(f.full_name) 
+        ? f.full_name 
+        : JSON.parse(f.full_name || "[]");
+      
       if (Array.isArray(parsed)) {
         const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         const todayDay = daysOfWeek[new Date().getDay()];
 
         return parsed.filter((slot: unknown): slot is AvailabilitySlot => {
           if (!slot || typeof slot !== "object") return false;
-          const candidate = slot as Partial<AvailabilitySlot>;
+          const candidate = slot as any;
+          const day = candidate.day || candidate.day_name;
+          const start = candidate.start || candidate.start_time;
+          const end = candidate.end || candidate.end_time;
           return (
-            candidate.day === todayDay &&
-            typeof candidate.start === "string" &&
-            typeof candidate.end === "string" &&
-            candidate.start.length > 0 &&
-            candidate.end.length > 0
+            day === todayDay &&
+            typeof start === "string" &&
+            typeof end === "string" &&
+            start.length > 0 &&
+            end.length > 0
           );
         });
       }
@@ -189,12 +204,16 @@ export default function KioskView() {
   };
 
   const handleJoinQueue = async () => {
+    console.log(`[DEBUG] handleJoinQueue called: studentId=${studentId}, selectedFaculty=${selectedFaculty}, selectedTimePeriod=${selectedTimePeriod}, concern=${consultationConcern}`);
+    
     if (!studentId || !selectedFaculty || !selectedTimePeriod) {
       setError("Please select a faculty member and choose a time slot.");
+      console.log(`[DEBUG] Missing required fields: studentId=${!!studentId}, selectedFaculty=${!!selectedFaculty}, selectedTimePeriod=${!!selectedTimePeriod}`);
       return;
     }
     if (!consultationConcern.trim()) {
       setError("Please provide your consultation concern before confirming.");
+      console.log(`[DEBUG] Consultation concern is empty`);
       return;
     }
 
@@ -202,6 +221,7 @@ export default function KioskView() {
     setError("");
 
     try {
+      console.log(`[DEBUG] Sending join queue request with: faculty_id=${selectedFaculty}, time_period=${selectedTimePeriod}`);
       const res = await fetch("/api/queue/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -223,11 +243,13 @@ export default function KioskView() {
         throw new Error(data.error || "Failed to join queue");
       }
 
+      console.log(`[DEBUG] Successfully joined queue:`, data);
       setSuccess(data);
       setTimeout(() => {
         navigate(`/student/${data.id}`);
       }, 3000);
     } catch (err: any) {
+      console.error(`[ERROR] Failed to join queue:`, err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -249,7 +271,24 @@ export default function KioskView() {
     );
   }
 
-  const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
+  const availableFaculty = faculty.filter((f) => {
+    try {
+      // full_name can be either already-parsed array or JSON string
+      const parsed = Array.isArray(f.full_name) 
+        ? f.full_name 
+        : JSON.parse(f.full_name || "[]");
+      
+      const hasSlotsToday = Array.isArray(parsed) && parsed.length > 0;
+      console.log(`[DEBUG] Faculty ${f.name}: full_name type=${typeof f.full_name}, is_array=${Array.isArray(f.full_name)}, parsed_length=${parsed.length}, has_slots=${hasSlotsToday}`);
+      
+      return hasSlotsToday;
+    } catch (err) {
+      console.error(`[ERROR] Failed to parse availability for ${f.name}:`, err, f.full_name);
+      return false;
+    }
+  });
+  
+  console.log(`[DEBUG] Total faculty: ${faculty.length}, Available faculty: ${availableFaculty.length}`);
 
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
@@ -259,9 +298,9 @@ export default function KioskView() {
           <button onClick={() => navigate("/")} className="p-2 sm:p-4 hover:opacity-70 rounded-full transition-all shrink-0">
             <ArrowLeft className="w-6 h-6 sm:w-8 sm:h-8" style={{ color: 'var(--clay-text-primary)' }} />
           </button>
-          <Users className="w-8 h-8 sm:w-12 sm:h-12 shrink-0" style={{ color: 'var(--clay-accent-warm)' }} />
+          <Calendar className="w-8 h-8 sm:w-12 sm:h-12 shrink-0" style={{ color: 'var(--clay-accent-warm)' }} />
           <h1 className="text-lg sm:text-3xl lg:text-4xl font-bold tracking-tight truncate" style={{ color: 'var(--clay-text-primary)' }}>
-            Student Booking Dashboard
+            Book Your Consultation
           </h1>
           <div className="ml-2 sm:ml-4 flex items-center gap-2 px-2 sm:px-3 py-1 rounded-full border shrink-0 badge badge-success">
             <span className="relative flex h-2 w-2">
@@ -279,7 +318,14 @@ export default function KioskView() {
 
       <main className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-x-hidden">
         <div className="flex-1 min-h-0 p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden max-w-5xl w-full mx-auto lg:mx-0">
-          <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-6 sm:mb-8" style={{ color: 'var(--clay-text-primary)' }}>Select Faculty & Time</h2>
+          <div className="mb-6 sm:mb-8">
+            <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
+              Select Faculty & Book Appointment
+            </h2>
+            <p className="text-sm sm:text-base mt-2" style={{ color: 'var(--clay-text-secondary)' }}>
+              View faculty availability for the entire week (Mon-Fri) and book your consultation in advance
+            </p>
+          </div>
           
           {error && (
             <div className="mb-6 sm:mb-8 flex items-start gap-3 p-4 sm:p-6 rounded-2xl text-base sm:text-lg lg:text-xl font-medium card" style={{
@@ -315,8 +361,8 @@ export default function KioskView() {
                   }}
                 >
                   <Users className="w-16 h-16 mx-auto mb-4" style={{ color: 'var(--clay-text-light)' }} />
-                  <p className="text-2xl font-medium" style={{ color: 'var(--clay-text-primary)' }}>No faculty with availability today.</p>
-                  <p className="text-lg mt-2" style={{ color: 'var(--clay-text-secondary)' }}>Only faculty who configured time slots for today are shown here.</p>
+                  <p className="text-2xl font-medium" style={{ color: 'var(--clay-text-primary)' }}>No faculty available for advance booking.</p>
+                  <p className="text-lg mt-2" style={{ color: 'var(--clay-text-secondary)' }}>Faculty schedules will appear once they set their availability for the week.</p>
                   <button 
                     onClick={fetchFaculty}
                     className="mt-6 px-6 py-3 font-bold rounded-xl transition-all btn btn-secondary"
@@ -370,78 +416,33 @@ export default function KioskView() {
                       
                       {timeRange && (
                         <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--clay-text-secondary)' }}>
-                          <Clock className="w-4 h-4" />
-                          {timeRange}
+                          <Calendar className="w-4 h-4" />
+                          Available for advance booking
                         </div>
                       )}
 
-                      {/* Expanded Time Slots */}
+                      {/* Expanded Weekly Schedule */}
                       {expandedFaculty === f.id && (
                         <div
                           className="mt-4 pt-4 border-t overflow-hidden transition-opacity duration-150"
                           style={{ borderColor: 'rgba(0,0,0,0.1)' }}
+                          onClick={(e) => e.stopPropagation()}
                         >
-                            <h4 className="text-base font-bold mb-3" style={{ color: 'var(--clay-text-primary)' }}>
-                              Select a Time Slot
-                            </h4>
-                            {(() => {
-                              const slots = getAvailabilitySlots(f);
-                              return (
-                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                                  {slots.map((slotObj, idx) => {
-                                    const { timeString, isPast } = slotObj;
-                                    const isBooked = bookedSlots.some(b => b.faculty_id === f.id && b.time_period === timeString);
-                                    const isSelected = selectedTimePeriod === timeString;
-                                    const isDisabled = isBooked || isPast || isSelected;
-                                    
-                                    return (
-                                      <button
-                                        key={idx}
-                                        disabled={isDisabled}
-                                        onMouseEnter={() => !isDisabled && setHoveredSlot(timeString)}
-                                        onMouseLeave={() => setHoveredSlot(null)}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          if (!isDisabled) {
-                                            setSelectedFaculty(f.id);
-                                            setSelectedTimePeriod(timeString);
-                                          }
-                                        }}
-                                        className={`w-full py-3 px-2 rounded-lg text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 text-white ${
-                                          isDisabled
-                                            ? "opacity-50 cursor-not-allowed"
-                                            : "cursor-pointer"
-                                        }`}
-                                        style={{
-                                          background: isDisabled 
-                                            ? '#999999' 
-                                            : hoveredSlot === timeString 
-                                              ? 'var(--clay-accent-warm)' 
-                                              : 'var(--clay-accent-sky)'
-                                        }}
-                                      >
-                                        <Clock className="w-4 h-4" />
-                                        <span>{timeString}</span>
-                                      </button>
-                                    );
-                                  })}
-                                  
-                                  {slots.length === 0 && f.status === 'busy' && (
-                                    <div className="col-span-2 sm:col-span-3 py-3 text-center text-sm font-bold rounded-lg text-white" style={{ background: 'var(--clay-accent-soft-coral)' }}>
-                                      Currently in consultation
-                                    </div>
-                                  )}
-                                  
-                                  {slots.length === 0 && f.status === 'offline' && (
-                                    <div className="col-span-2 sm:col-span-3 py-3 text-center text-sm font-bold rounded-lg text-white" style={{ background: '#999999' }}>
-                                      Not available for booking
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        )}
+                          <WeeklySchedule
+                            facultyId={f.id}
+                            facultyName={f.name}
+                            bookedSlots={bookedSlots}
+                            selectedSlot={selectedFaculty === f.id && selectedTimePeriod && selectedDate ? { date: selectedDate, timeString: selectedTimePeriod } : null}
+                            onSlotSelect={(slot, date, day) => {
+                              console.log(`[DEBUG] KioskView.onSlotSelect called with slot: ${slot.timeString}, date: ${date}`);
+                              setSelectedFaculty(f.id);
+                              setSelectedTimePeriod(slot.timeString);
+                              setSelectedDate(date);
+                              console.log(`[DEBUG] Selected faculty: ${f.id}, time period: ${slot.timeString}, date: ${date}`);
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 );
@@ -467,13 +468,11 @@ export default function KioskView() {
                 required
               >
                 <option value="">Select your concern...</option>
-                <option value="Academic Advising">Academic Advising</option>
-                <option value="Grade Consultation">Grade Consultation</option>
+                <option value="Academic Advising">Academic Advising / Course Enrollment</option>
+                <option value="Grade Consultation">Attendance / Grade Consultation</option>
                 <option value="Thesis / Capstone Advising">Thesis / Capstone Advising</option>
-                <option value="Course Enrollment / Schedule">Course Enrollment / Schedule</option>
                 <option value="Internship / OJT Concern">Internship / OJT Concern</option>
-                <option value="Attendance / Absence Concern">Attendance / Absence Concern</option>
-                <option value="Other">Other</option>
+                <option value="Other">Other Personal Concerns</option>
               </select>
             </div>
             <button

@@ -171,6 +171,22 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+// ===== AVAILABILITY DATA NORMALIZATION =====
+const normalizeAvailabilityData = (fullNameField: any): any[] => {
+  try {
+    let data = typeof fullNameField === 'string' ? JSON.parse(fullNameField) : fullNameField;
+    if (!Array.isArray(data)) return [];
+    
+    return data.map((slot: any) => ({
+      day: slot.day || slot.day_name || '',
+      start: slot.start || slot.start_time || '',
+      end: slot.end || slot.end_time || ''
+    })).filter((s: any) => s.day && s.start && s.end);
+  } catch {
+    return [];
+  }
+};
+
 // ===== ADMIN SESSION MANAGEMENT =====
 const ADMIN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const adminSessions = new Map<string, { createdAt: number; ip: string; userAgent: string }>();
@@ -2458,8 +2474,21 @@ async function startServer() {
 
       if (error) throw error;
 
-      if (!data || !verifyPassword(password, data.password)) {
-        await logAudit("faculty_login_failed", { email: normalizedEmail, ip }, req);
+      if (!data) {
+        await logAudit("faculty_login_failed", { email: normalizedEmail, ip, reason: "not_found" }, req);
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      // Check if faculty has a password set
+      const hasPassword = data.password && data.password.trim();
+      if (!hasPassword) {
+        await logAudit("faculty_login_failed", { email: normalizedEmail, ip, reason: "no_password" }, req);
+        return res.status(401).json({ error: "Faculty account not yet initialized. Contact admin to set a password." });
+      }
+
+      // Verify password
+      if (!verifyPassword(password, data.password)) {
+        await logAudit("faculty_login_failed", { email: normalizedEmail, ip, reason: "invalid_password" }, req);
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
@@ -2476,9 +2505,13 @@ async function startServer() {
       await logAudit("faculty_login_success", { email: normalizedEmail, ip }, req);
       await logActivity("login", "faculty", data.id, normalizedEmail, "faculty", { name: data.name }, req);
 
-      // Return faculty data without the password
+      // Normalize availability data  and return faculty data without the password
+      const normalizedFull_name = normalizeAvailabilityData(data.full_name);
       const { password: _pw, ...safeData } = data;
-      res.json(safeData);
+      res.json({
+        ...safeData,
+        full_name: normalizedFull_name
+      });
     } catch (err: any) {
       console.error("Faculty login error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -2542,8 +2575,13 @@ async function startServer() {
       const formattedData = (facultyData || []).map((f: any) => {
         const dept = (deptData || []).find((d: any) => d.id === f.department_id);
         const { password: _pw, ...safeFields } = f;
+        
+        // Normalize availability data
+        const normalizedFull_name = normalizeAvailabilityData(f.full_name);
+        
         return {
           ...safeFields,
+          full_name: normalizedFull_name,
           department: dept ? dept.name : "Unknown Department"
         };
       });
@@ -2962,7 +3000,7 @@ async function startServer() {
           targetEmail,
           "Consultation Booking Confirmed",
           `
-          <h2>Consultation Booking Confirmed</h2>
+          <h2>Consultation Appointment Confirmed</h2>
           <p>Hi ${formatted.student_name || 'Student'},</p>
           <p>You have successfully joined the queue for a consultation.</p>
           <p><strong>Faculty:</strong> ${formatted.faculty_name || 'Your selected faculty'}</p>
@@ -2971,7 +3009,7 @@ async function startServer() {
           <p>You can track your status on the kiosk or web application at any time.</p>
           <p>If you have any questions, please contact the faculty office.</p>
           <br/>
-          <p>Best regards,<br/>Consultation System</p>
+          <p>Best regards,<br/>CEN Faculty Consultation System</p>
           `
         );
       }
@@ -3028,6 +3066,124 @@ async function startServer() {
     } catch (err: any) {
       console.error("❌ Booked slots endpoint error:", err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get faculty weekly schedule (Monday-Friday) for advance booking
+  app.get("/api/faculty/:id/weekly-schedule", async (req, res) => {
+    try {
+      const facultyId = req.params.id;
+      
+      // Fetch faculty with availability
+      const { data: facultyData } = await getSupabase()
+        .from("faculty")
+        .select("full_name")
+        .eq("id", facultyId)
+        .maybeSingle();
+
+      if (!facultyData) {
+        return res.status(404).json({ error: "Faculty not found" });
+      }
+
+      // Normalize availability data
+      const availabilitySlots = normalizeAvailabilityData(facultyData.full_name);
+
+      // Generate weekly schedule starting from NEXT MONDAY
+      const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const today = new Date();
+      
+      // Find next Monday
+      const todayDay = today.getDay();
+      let daysUntilMonday = 0;
+      
+      if (todayDay === 0) {
+        // Today is Sunday, next Monday is tomorrow
+        daysUntilMonday = 1;
+      } else if (todayDay === 1) {
+        // Today is Monday, next Monday is in 7 days
+        daysUntilMonday = 7;
+      } else {
+        // Other days: calculate days until next Monday
+        daysUntilMonday = 8 - todayDay;
+      }
+      
+      console.log(`[DEBUG] Generating weekly schedule for faculty ${facultyId}. Today is ${daysOfWeek[todayDay]}, next Monday is in ${daysUntilMonday} days`);
+      const schedule: any[] = [];
+
+      // Generate Mon-Fri starting from next Monday
+      for (let i = 0; i < 5; i++) {
+        // Create date at START of day in local time (not UTC)
+        const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilMonday + i);
+        
+        const day = daysOfWeek[date.getDay()];
+        // Format date as YYYY-MM-DD using local date
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const dateNum = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${dateNum}`;
+
+        // Find availability slots for this day
+        const daySlots = availabilitySlots.filter((slot: any) => slot.day === day);
+
+        if (daySlots.length === 0) {
+          schedule.push({
+            date: dateStr,
+            day: day,
+            slots: []
+          });
+          continue;
+        }
+
+        const daySchedule: any = {
+          date: dateStr,
+          day: day,
+          slots: []
+        };
+
+        // Generate 15-minute slots from availability
+        daySlots.forEach((slot: any) => {
+          const [startHour, startMin] = slot.start.split(":").map(Number);
+          const [endHour, endMin] = slot.end.split(":").map(Number);
+
+          let current = new Date(date);
+          current.setHours(startHour, startMin, 0, 0);
+
+          const end = new Date(date);
+          end.setHours(endHour, endMin, 0, 0);
+
+          const now = new Date();
+          console.log(`[DEBUG] Generating slots for ${day} ${dateStr} from ${slot.start} to ${slot.end}. Now: ${now.toISOString()}`);
+
+          while (current < end) {
+            const slotStart = new Date(current);
+            const slotEnd = new Date(current.getTime() + 15 * 60000);
+
+            if (slotEnd > end) break;
+
+            const isPast = slotStart < now;
+            const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
+
+            console.log(`[DEBUG]   Slot: ${timeString}, slotStart=${slotStart.toISOString()}, isPast=${isPast}`);
+
+            daySchedule.slots.push({
+              start: slotStart.toISOString(),
+              end: slotEnd.toISOString(),
+              timeString: timeString,
+              isPast: isPast
+            });
+
+            current = new Date(slotEnd.getTime() + 5 * 60000);
+          }
+        });
+
+        schedule.push(daySchedule);
+      }
+
+      console.log(`[DEBUG] Final schedule has ${schedule.length} days, starting from next Monday`);
+      res.json(schedule);
+    } catch (err: any) {
+      console.error("Weekly schedule error:", err);
+      res.status(500).json({ error: "Failed to fetch weekly schedule" });
     }
   });
 

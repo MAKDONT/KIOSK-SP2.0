@@ -905,7 +905,10 @@ export default function FacultyDashboard() {
   const openAvailabilityModal = () => {
     if (!selectedFacultyData) return;
     try {
-      const parsed = JSON.parse(selectedFacultyData.full_name || "[]");
+      // full_name can be either already-parsed array or JSON string
+      const parsed = Array.isArray(selectedFacultyData.full_name)
+        ? selectedFacultyData.full_name
+        : JSON.parse(selectedFacultyData.full_name || "[]");
       if (Array.isArray(parsed)) {
         setAvailabilitySlots(parsed);
       } else {
@@ -918,16 +921,33 @@ export default function FacultyDashboard() {
   };
 
   const saveAvailability = async () => {
+    // Validate that all slots have required fields
+    for (let i = 0; i < availabilitySlots.length; i++) {
+      const slot = availabilitySlots[i];
+      if (!slot.day || !slot.start || !slot.end) {
+        alert(`Time Slot ${i + 1} is incomplete. Please fill in all fields (Day, Start Time, End Time).`);
+        return;
+      }
+    }
+
     try {
-      await fetch(`/api/faculty/${selectedFaculty}/availability`, {
+      const res = await fetch(`/api/faculty/${selectedFaculty}/availability`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ availability: availabilitySlots }),
       });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to save availability (${res.status})`);
+      }
+
+      alert("Availability saved successfully!");
       setShowAvailabilityModal(false);
       fetchFaculty();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save availability", err);
+      alert(`Error saving availability: ${err.message}`);
     }
   };
 
@@ -1320,12 +1340,6 @@ export default function FacultyDashboard() {
                      selectedFacultyData.status === 'busy' ? 'Busy' : 'Offline'}
                   </p>
                 </div>
-                <button 
-                  onClick={toggleFacultyStatus}
-                  className="w-full py-3 px-4 text-white font-medium rounded-xl transition-colors" style={{ background: selectedFacultyData.status === 'available' ? 'var(--clay-accent-soft-coral)' : 'var(--clay-accent-sage)' }}
-                >
-                  {selectedFacultyData.status === 'available' ? 'Go Offline' : 'Go Available'}
-                </button>
 
                 <button
                   onClick={openPasswordModal}
