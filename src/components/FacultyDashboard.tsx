@@ -2,7 +2,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
-import { formatTime12HourPHT } from "../utils/timezoneUtils";
+import { formatTime12HourPHTFns } from "../utils/timezoneUtils";
 
 interface Consultation {
   id: number;
@@ -57,7 +57,7 @@ const getConsultationTimeLabel = (consultation: Consultation) => {
     return "Walk-in queue";
   }
 
-  return `Queued ${createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `Queued ${formatTime12HourPHTFns(createdAt)}`;
 };
 
 export default function FacultyDashboard() {

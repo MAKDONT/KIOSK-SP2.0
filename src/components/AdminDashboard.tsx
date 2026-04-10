@@ -2,6 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { Shield, LogOut, Plus, Building, UserPlus, ArrowLeft, Trash2, KeyRound, AlertTriangle, Users, FolderOpen, RefreshCw, Search, FileAudio, ExternalLink, Download, Mail, Eye, EyeOff, FileText } from "lucide-react";
 import { safeGetItem, safeClearStorage } from "../utils/storageUtils";
+import { formatDisplayDateTimePHT } from "../utils/timezoneUtils";
 import AuditLogs from "./AuditLogs";
 
 interface LiveQueueItem {
@@ -1122,13 +1123,7 @@ export default function AdminDashboard() {
     if (!value) return "Unknown upload date";
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return "Unknown upload date";
-    return parsed.toLocaleString([], {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    return formatDisplayDateTimePHT(parsed);
   };
 
   const formatRecordingSize = (value: number | null) => {

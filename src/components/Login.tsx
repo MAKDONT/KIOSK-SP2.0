@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
-import { getDayNamePHT } from "../utils/timezoneUtils";
+import { getDayNamePHT, formatTime12HourPHTFns } from "../utils/timezoneUtils";
 
 interface Faculty {
   id: string;
@@ -256,7 +256,7 @@ export default function Login() {
       const [h, m] = timeStr.split(":").map(Number);
       const d = new Date();
       d.setHours(h, m, 0, 0);
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
+      return formatTime12HourPHTFns(d);
     };
 
     return todaySlots.map((slot) => `${formatTime(slot.start)} - ${formatTime(slot.end)}`).join(", ");

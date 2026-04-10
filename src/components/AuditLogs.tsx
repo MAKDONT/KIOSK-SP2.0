@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect } from "react";
 import { Download, RotateCw, AlertCircle } from "lucide-react";
+import { formatDisplayDateTimePHT } from "../utils/timezoneUtils";
 
 interface SystemLog {
   id: number;
@@ -64,7 +65,7 @@ export default function AuditLogs() {
             log.target_id || "",
             log.ip || "",
             `"${(log.user_agent || "").replace(/"/g, '""')}"`,
-            new Date(log.created_at).toLocaleString(),
+            formatDisplayDateTimePHT(new Date(log.created_at)),
             `"${JSON.stringify(log.details || {}).replace(/"/g, '""')}"`
           ].join(",")
         )
@@ -173,7 +174,7 @@ export default function AuditLogs() {
                     <td className="px-3 py-2 text-gray-600 font-mono text-xs whitespace-nowrap">{log.ip || "-"}</td>
                     <td className="px-3 py-2 text-gray-600 text-xs whitespace-nowrap">{log.user_agent || "-"}</td>
                     <td className="px-3 py-2 text-gray-600 text-xs whitespace-nowrap">
-                      {new Date(log.created_at).toLocaleString()}
+                      {formatDisplayDateTimePHT(new Date(log.created_at))}
                     </td>
                     <td className="px-3 py-2 text-gray-600 text-xs max-w-xs overflow-x-auto">
                       <code className="bg-gray-100 px-2 py-1 rounded inline-block">

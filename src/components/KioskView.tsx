@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { User, Users, CheckCircle, AlertCircle, Clock, ArrowLeft, Calendar, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { safeGetItem } from "../utils/storageUtils";
-import { formatTime12HourPHT, getDayNamePHT } from "../utils/timezoneUtils";
+import { formatTime12HourPHTFns, getDayNamePHT } from "../utils/timezoneUtils";
 import { WeeklySchedule } from "./WeeklySchedule";
 
 interface Faculty {
@@ -121,7 +121,7 @@ export default function KioskView() {
       const [h, m] = timeStr.split(":").map(Number);
       const d = new Date();
       d.setHours(h, m, 0, 0);
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
+      return formatTime12HourPHTFns(d);
     };
 
     return todaySlots.map((slot) => {

@@ -4095,18 +4095,15 @@ async function startServer() {
       const now = new Date();
       const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       
-      // Get current day in APP_TIMEZONE
-      const getDayOfWeekInTimezone = (date: Date) => {
-        const formatter = new Intl.DateTimeFormat("en-US", {
-          timeZone: APP_TIMEZONE,
-          weekday: "long",
-        });
-        const dayName = formatter.format(date);
-        return days.indexOf(dayName);
-      };
-      
+      // Get current day in APP_TIMEZONE using date-fns-tz
       const todayDayIndex = getDayOfWeekInTimezone(now);
       const todayName = days[todayDayIndex];
+      
+      // Get current time in PHT for comparison
+      const currentTimeInPHT = formatInTimeZone(now, APP_TIMEZONE, "HH:mm:ss");
+      const [currentHourStr, currentMinStr] = currentTimeInPHT.split(":");
+      const currentHourInPHT = parseInt(currentHourStr, 10);
+      const currentMinInPHT = parseInt(currentMinStr, 10);
       
       for (const item of waitingQueue) {
         if (!item.meet_link) continue;
@@ -4130,10 +4127,8 @@ async function startServer() {
               if (ampm === 'PM' && hours < 12) hours += 12;
               if (ampm === 'AM' && hours === 12) hours = 0;
               
-              const endTime = new Date();
-              endTime.setHours(hours, mins, 0, 0);
-              
-              if (now > endTime) {
+              // Compare times in PHT timezone - slot expired if end time has passed
+              if (hours < currentHourInPHT || (hours === currentHourInPHT && mins <= currentMinInPHT)) {
                 isExpired = true;
               }
             }
@@ -6252,9 +6247,13 @@ async function startServer() {
         }
 
         const now = new Date();
-        const currentHours = now.getHours();
-        const currentMinutes = now.getMinutes();
-        const currentTotalMinutes = currentHours * 60 + currentMinutes;
+        
+        // Get current time in PHT using date-fns-tz for Render compatibility
+        const currentTimeInPHT = formatInTimeZone(now, APP_TIMEZONE, "HH:mm:ss");
+        const [currentHourStr, currentMinStr] = currentTimeInPHT.split(":");
+        const currentHourInPHT = parseInt(currentHourStr, 10);
+        const currentMinInPHT = parseInt(currentMinStr, 10);
+        const currentTotalMinutesInPHT = currentHourInPHT * 60 + currentMinInPHT;
 
         for (const consultation of ongoingConsultations) {
           if (!consultation.meet_link) continue;
@@ -6300,7 +6299,7 @@ async function startServer() {
           }
 
           const endTotalMinutes = endHour * 60 + endMin;
-          const minutesPastEnd = currentTotalMinutes - endTotalMinutes;
+          const minutesPastEnd = currentTotalMinutesInPHT - endTotalMinutes;
 
           // If time has passed, auto-cancel this waiting consultation
           if (minutesPastEnd > 0) {

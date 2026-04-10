@@ -167,3 +167,50 @@ export function getDateStringPHT(date: Date = new Date()): string {
 export function getTodayStringPHT(): string {
   return getDateStringPHT(new Date());
 }
+
+/**
+ * Format a datetime string in PHT using date-fns-tz for consistency with backend
+ * @param date - Date to format
+ * @param format - Format string (e.g., "hh:mm a" for "2:30 PM", "HH:mm:ss" for "14:30:45")
+ * @returns Formatted string in PHT timezone
+ */
+export function formatInTimezonePHT(date: Date, format: string = "hh:mm a"): string {
+  try {
+    // Import inside function to avoid build issues if date-fns-tz not installed
+    const { formatInTimeZone } = require("date-fns-tz");
+    return formatInTimeZone(date, PHT_TIMEZONE, format);
+  } catch (e) {
+    // Fallback to Intl if date-fns-tz not available
+    if (format.includes("a")) {
+      return formatTime12HourPHT(date);
+    }
+    return formatTime24HourPHT(date);
+  }
+}
+
+/**
+ * Format datetime as "YYYY-MM-DD HH:mm:ss" in PHT
+ * @param date - Date to format
+ * @returns Formatted string in PHT timezone
+ */
+export function formatDateTimePHT(date: Date = new Date()): string {
+  return formatInTimezonePHT(date, "yyyy-MM-dd HH:mm:ss");
+}
+
+/**
+ * Format time as "hh:mm a" (12-hour) in PHT using date-fns-tz
+ * @param date - Date to format
+ * @returns Time string like "2:30 PM"
+ */
+export function formatTime12HourPHTFns(date: Date = new Date()): string {
+  return formatInTimezonePHT(date, "hh:mm a");
+}
+
+/**
+ * Format datetime as "MMM dd, yyyy hh:mm a" in PHT for display
+ * @param date - Date to format
+ * @returns Formatted string like "Dec 25, 2026 2:30 PM"
+ */
+export function formatDisplayDateTimePHT(date: Date = new Date()): string {
+  return formatInTimezonePHT(date, "MMM dd, yyyy hh:mm a");
+}
