@@ -2,7 +2,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
-import { formatTime12HourPHTFns } from "../utils/timezoneUtils";
+import { formatTime12HourPHTFns, formatInTimezonePHT, getDayNamePHT } from "../utils/timezoneUtils";
 
 interface Consultation {
   id: number;
@@ -49,15 +49,19 @@ const readJsonResponse = async (response: Response, fallbackMessage: string) => 
 const getConsultationTimeLabel = (consultation: Consultation) => {
   const scheduledSlot = consultation.time_period?.trim();
   if (scheduledSlot) {
+    // scheduledSlot already includes day name and time (e.g., "Monday 09:00 AM - 09:15 AM")
     return scheduledSlot;
   }
 
   const createdAt = new Date(consultation.created_at);
   if (Number.isNaN(createdAt.getTime())) {
-    return "Walk-in queue";
+    return "Walk-in consultation";
   }
 
-  return `Queued ${formatTime12HourPHTFns(createdAt)}`;
+  // For walk-in consultations, show day and time using timezone-aware formatting
+  const dayName = getDayNamePHT(createdAt);
+  const timeFormatted = formatTime12HourPHTFns(createdAt);
+  return `${dayName} ${timeFormatted} (Walk-in)`;
 };
 
 export default function FacultyDashboard() {

@@ -3254,7 +3254,7 @@ async function startServer() {
         
         await sendEmailNotification(
           targetEmail,
-          "Consultation Booking Confirmed",
+          "Consultation Appointment Confirmed",
           `
           <h2>Consultation Appointment Confirmed</h2>
           <p>Hi ${formatted.student_name || 'Student'},</p>
