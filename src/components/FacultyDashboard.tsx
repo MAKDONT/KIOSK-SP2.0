@@ -11,6 +11,7 @@ interface Consultation {
   student_number?: string;
   status: "waiting" | "serving";
   created_at: string;
+  queue_date?: string; // YYYY-MM-DD format
   source: string;
   meet_link?: string;
   purpose?: string;
@@ -48,8 +49,15 @@ const readJsonResponse = async (response: Response, fallbackMessage: string) => 
 
 const getConsultationTimeLabel = (consultation: Consultation) => {
   const scheduledSlot = consultation.time_period?.trim();
+  
   if (scheduledSlot) {
-    // scheduledSlot already includes day name and time (e.g., "Monday 09:00 AM - 09:15 AM")
+    // If time_period exists, prepend the day name from queue_date
+    if (consultation.queue_date) {
+      // Parse queue_date (YYYY-MM-DD format) to get day of week
+      const consultationDate = new Date(consultation.queue_date + 'T00:00:00');
+      const dayName = getDayNamePHT(consultationDate);
+      return `${dayName} ${scheduledSlot}`;
+    }
     return scheduledSlot;
   }
 

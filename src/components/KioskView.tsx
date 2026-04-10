@@ -454,7 +454,7 @@ export default function KioskView() {
             >
               {loading ? "Processing..." : <>
                 <CheckCircle className="w-10 h-10" />
-                CONFIRM BOOKING
+                CONFIRM CONSULTATION
               </>}
             </button>
           </div>
