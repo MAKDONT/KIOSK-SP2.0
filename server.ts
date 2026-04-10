@@ -4095,6 +4095,12 @@ async function startServer() {
       const now = new Date();
       const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       
+      // Helper function to get day of week in APP_TIMEZONE
+      const getDayOfWeekInTimezone = (date: Date) => {
+        const zonedDate = toZonedTime(date, APP_TIMEZONE);
+        return zonedDate.getDay();
+      };
+      
       // Get current day in APP_TIMEZONE using date-fns-tz
       const todayDayIndex = getDayOfWeekInTimezone(now);
       const todayName = days[todayDayIndex];
