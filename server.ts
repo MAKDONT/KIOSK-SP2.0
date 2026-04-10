@@ -6233,7 +6233,7 @@ async function startServer() {
         const { data: ongoingConsultations, error: fetchError } = await retryWithBackoff(async () => {
           return await getSupabase()
             .from("queue")
-            .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email)")
+            .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email), faculty(name, full_name)")
             .eq("status", "waiting");
         }, 2, 500);
 
@@ -6304,28 +6304,70 @@ async function startServer() {
           // If time has passed, auto-cancel this waiting consultation
           if (minutesPastEnd > 0) {
             console.log(`\n⏰ [AUTO-ADVANCE] WAITING Consultation ${consultation.id} (${studentName}) scheduled time ended ${minutesPastEnd} minutes ago`);
-            console.log(`   Status: ${consultation.status} → cancelling (no-show)`);
+            console.log(`   Status: ${consultation.status} → removing from queue (no-show)`);
 
             try {
-              // Mark as done since student's scheduled time is over and they haven't been served
+              const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
+              const facultyName = (consultation as any)?.faculty?.full_name || (consultation as any)?.faculty?.name || "Faculty Member";
+              
+              // Mark as cancelled (no-show) since student's scheduled time is over and they haven't been served
               const { error: updateError } = await getSupabase()
                 .from("queue")
-                .update({ status: "done" })
+                .update({ status: "cancelled" })
                 .eq("id", consultation.id);
 
               if (updateError) {
                 console.error(`   ❌ Failed to update:`, updateError.message);
               } else {
-                console.log(`   ✅ Auto-cancelled consultation (no-show - time expired)`);
+                console.log(`   ✅ Auto-removed from queue (no-show - time expired)`);
+
+                // Send email notification to student
+                if (studentEmail) {
+                  const emailSubject = "Consultation Time Expired - EARIST Queue Management System";
+                  const emailHtml = `
+                    <div style="font-family: Arial, sans-serif; background-color: #f5f1ed; padding: 20px;">
+                      <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <h2 style="color: #d84d42; margin-top: 0;">Consultation Time Expired</h2>
+                        
+                        <p>Dear ${studentName},</p>
+                        
+                        <p>Your consultation appointment with <strong>${facultyName}</strong> was scheduled for:</p>
+                        
+                        <div style="background-color: #f9f1eb; border-left: 4px solid #d84d42; padding: 15px; margin: 20px 0;">
+                          <p style="margin: 5px 0;"><strong>Scheduled Time:</strong> ${timePart}</p>
+                          <p style="margin: 5px 0;"><strong>Consultation ID:</strong> #${consultation.id}</p>
+                        </div>
+                        
+                        <p style="color: #666;">Since you were not attended to during your scheduled time slot and did not join the queue before it expired, your consultation has been automatically removed from the queue.</p>
+                        
+                        <h3 style="color: #333; margin-top: 25px;">What to do next?</h3>
+                        <ul style="color: #666; line-height: 1.8;">
+                          <li>Visit the EARIST Queue Management System to schedule a new consultation</li>
+                          <li>Select the same faculty member or request a different faculty advisor</li>
+                          <li>Choose an available time slot that works for you</li>
+                        </ul>
+                        
+                        <p style="color: #999; font-size: 12px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+                          This is an automated notification from the EARIST Queue Management System. Please do not reply to this email.
+                        </p>
+                      </div>
+                    </div>
+                  `;
+                  
+                  await sendEmailNotification(studentEmail, emailSubject, emailHtml);
+                  console.log(`   📧 Notification email sent to ${studentEmail}`);
+                }
 
                 // Log audit event
-                await logAudit("consultation_auto_ended", {
+                await logAudit("consultation_auto_removed", {
                   consultation_id: consultation.id,
                   student_id: consultation.student_id,
                   student_name: studentName,
-                  reason: "no_show",
-                  minutes_past_time: minutesPastEnd,
-                  scheduled_time: timePart
+                  student_email: studentEmail,
+                  reason: "no_show_time_expired",
+                  minutes_past_end: minutesPastEnd,
+                  scheduled_time: timePart,
+                  faculty_name: facultyName
                 });
 
                 // Broadcast to update UI
