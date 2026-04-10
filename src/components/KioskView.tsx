@@ -292,7 +292,7 @@ export default function KioskView() {
         </div>
         <div className="text-base sm:text-lg lg:text-2xl font-medium flex items-center gap-2 w-full lg:w-auto justify-between lg:justify-end" style={{ color: 'var(--clay-text-secondary)' }}>
           <Clock className="w-5 h-5 sm:w-6 sm:h-6 lg:w-8 lg:h-8" />
-          {formatTime12HourPHT()}
+          {formatTime12HourPHTFns()}
         </div>
       </header>
 
