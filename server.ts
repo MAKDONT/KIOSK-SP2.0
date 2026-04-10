@@ -2906,6 +2906,50 @@ async function startServer() {
       // If student didn't select a specific faculty, that's okay - they'll be routed to any available faculty
       // If faculty_id is provided, we could add additional validation here if needed
 
+      // Validate time slot is not in the past if specified
+      if (time_period) {
+        try {
+          const now = new Date();
+          const todayString = getCurrentAppDate();
+          
+          // Parse time_period format: "Monday 09:00 AM - 09:15 AM"
+          const timeMatch = time_period.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          
+          if (timeMatch) {
+            let endHour = parseInt(timeMatch[4], 10);
+            const endMin = parseInt(timeMatch[5], 10);
+            const endAmPm = timeMatch[6].toUpperCase();
+            
+            // Convert to 24-hour format
+            if (endAmPm === 'PM' && endHour < 12) endHour += 12;
+            if (endAmPm === 'AM' && endHour === 12) endHour = 0;
+            
+            // Get current time in PHT
+            const currentTimeInPHT = new Intl.DateTimeFormat("en-US", {
+              timeZone: APP_TIMEZONE,
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hour12: false,
+            }).format(now);
+            
+            const [currentHourStr, currentMinStr] = currentTimeInPHT.split(":");
+            const currentHour = parseInt(currentHourStr, 10);
+            const currentMin = parseInt(currentMinStr, 10);
+            
+            // Check if slot end time has passed (today only)
+            if (endHour < currentHour || (endHour === currentHour && endMin <= currentMin)) {
+              return res.status(400).json({ 
+                error: "This time slot has already passed. Please select a future time slot." 
+              });
+            }
+          }
+        } catch (timeValidationErr: any) {
+          console.warn("Time validation error (non-blocking):", timeValidationErr.message);
+          // Don't fail booking if time parsing fails - proceed anyway
+        }
+      }
+
       // Check if student exists
       let { data: student } = await getSupabase()
         .from("students")
@@ -3410,16 +3454,23 @@ async function startServer() {
             if (slotEnd > end) break;
 
             // Determine if slot is past based on PHT current time
-            // For today's slots, check if the slot's END time has passed
-            const slotHour = slotStart.getHours();
-            const slotMin = slotStart.getMinutes();
-            const slotEndHour = slotEnd.getHours();
-            const slotEndMin = slotEnd.getMinutes();
+            // Get slot end time in PHT (not system UTC)
+            const slotEndTimeInPHT = new Intl.DateTimeFormat("en-US", {
+              timeZone: APP_TIMEZONE,
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hour12: false,
+            }).format(slotEnd);
+            
+            const [slotEndHourStr, slotEndMinStr] = slotEndTimeInPHT.split(":");
+            const slotEndHourInPHT = parseInt(slotEndHourStr, 10);
+            const slotEndMinInPHT = parseInt(slotEndMinStr, 10);
             
             // Check if this slot day is today and its end time has passed
             const isSlotToday = isSameDateInTimezone(date, todayUTC);
-            const isPast = isSlotToday && (slotEndHour < currentHourInPHT || 
-                          (slotEndHour === currentHourInPHT && slotEndMin <= currentMinInPHT));
+            const isPast = isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
+                          (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT));
             
             const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
 
