@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
+import { getDayNamePHT } from "../utils/timezoneUtils";
 
 interface Faculty {
   id: string;
@@ -229,8 +230,7 @@ export default function Login() {
         : JSON.parse(f.full_name || "[]");
       
       if (Array.isArray(parsed)) {
-        const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const todayDay = daysOfWeek[new Date().getDay()];
+        const todayDay = getDayNamePHT();
 
         return parsed.filter((slot: unknown): slot is AvailabilitySlot => {
           if (!slot || typeof slot !== "object") return false;

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { User, Users, CheckCircle, AlertCircle, Clock, ArrowLeft, Calendar, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { safeGetItem } from "../utils/storageUtils";
+import { formatTime12HourPHT, getDayNamePHT } from "../utils/timezoneUtils";
 import { WeeklySchedule } from "./WeeklySchedule";
 
 interface Faculty {
@@ -137,8 +138,7 @@ export default function KioskView() {
         : JSON.parse(f.full_name || "[]");
       
       if (Array.isArray(parsed)) {
-        const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const todayDay = daysOfWeek[new Date().getDay()];
+        const todayDay = getDayNamePHT();
 
         return parsed.filter((slot: unknown): slot is AvailabilitySlot => {
           if (!slot || typeof slot !== "object") return false;
@@ -292,7 +292,7 @@ export default function KioskView() {
         </div>
         <div className="text-base sm:text-lg lg:text-2xl font-medium flex items-center gap-2 w-full lg:w-auto justify-between lg:justify-end" style={{ color: 'var(--clay-text-secondary)' }}>
           <Clock className="w-5 h-5 sm:w-6 sm:h-6 lg:w-8 lg:h-8" />
-          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {formatTime12HourPHT()}
         </div>
       </header>
 
