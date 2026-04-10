@@ -3279,6 +3279,17 @@ async function startServer() {
       // Normalize availability data
       const availabilitySlots = normalizeAvailabilityData(facultyData.full_name);
 
+      // Helper to check if two dates are the same day in APP_TIMEZONE
+      const isSameDateInTimezone = (date1: Date, date2: Date): boolean => {
+        const formatter = new Intl.DateTimeFormat("en-CA", {
+          timeZone: APP_TIMEZONE,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        return formatter.format(date1) === formatter.format(date2);
+      };
+
       // Generate schedule for current week (Mon-Fri), showing from Monday to today
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       
@@ -3306,6 +3317,20 @@ async function startServer() {
       const todayUTC = new Date();
       const today = getDateInTimezone(todayUTC);
       const todayDay = getDayOfWeekInTimezone(todayUTC);
+      
+      // Get current time in PHT for slot comparison
+      const currentTimeInPHT = new Intl.DateTimeFormat("en-US", {
+        timeZone: APP_TIMEZONE,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(todayUTC);
+      
+      const [currentHourStr, currentMinStr, currentSecStr] = currentTimeInPHT.split(":");
+      const currentHourInPHT = parseInt(currentHourStr, 10);
+      const currentMinInPHT = parseInt(currentMinStr, 10);
+      
       
       // If today is weekend (Sat/Sun), show current week Mon-Fri
       // If today is weekday (Mon-Fri), show Mon through today
@@ -3384,8 +3409,18 @@ async function startServer() {
 
             if (slotEnd > end) break;
 
-            // Compare with current UTC time
-            const isPast = slotStart < todayUTC;
+            // Determine if slot is past based on PHT current time
+            // For today's slots, check if the slot's END time has passed
+            const slotHour = slotStart.getHours();
+            const slotMin = slotStart.getMinutes();
+            const slotEndHour = slotEnd.getHours();
+            const slotEndMin = slotEnd.getMinutes();
+            
+            // Check if this slot day is today and its end time has passed
+            const isSlotToday = isSameDateInTimezone(date, todayUTC);
+            const isPast = isSlotToday && (slotEndHour < currentHourInPHT || 
+                          (slotEndHour === currentHourInPHT && slotEndMin <= currentMinInPHT));
+            
             const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
 
             daySchedule.slots.push({
