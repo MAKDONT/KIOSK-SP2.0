@@ -12,6 +12,7 @@ import fs from "fs";
 import dotenv from "dotenv";
 import { Readable } from "stream";
 import path from "path";
+import { toZonedTime, formatInTimeZone } from "date-fns-tz";
 
 // Load environment variables from .env.local
 dotenv.config({ path: '.env.local' });
@@ -196,25 +197,15 @@ const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
 
   const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   
-  // Get current date in APP_TIMEZONE (Asia/Manila for Render compatibility)
+  // Get current date in APP_TIMEZONE using date-fns-tz
   const getDateInTimezone = (date: Date) => {
-    const formatter = new Intl.DateTimeFormat("en-CA", {
-      timeZone: APP_TIMEZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const parts = formatter.format(date).split("-");
-    return new Date(parts[0] + "-" + parts[1] + "-" + parts[2] + "T00:00:00");
+    const zonedDate = toZonedTime(date, APP_TIMEZONE);
+    return new Date(zonedDate.getFullYear(), zonedDate.getMonth(), zonedDate.getDate());
   };
 
   const getDayOfWeekInTimezone = (date: Date) => {
-    const formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone: APP_TIMEZONE,
-      weekday: "long",
-    });
-    const dayName = formatter.format(date);
-    return daysOfWeek.indexOf(dayName);
+    const zonedDate = toZonedTime(date, APP_TIMEZONE);
+    return zonedDate.getDay();
   };
   
   const todayUTC = new Date();
@@ -866,14 +857,7 @@ async function startServer() {
     return stringValue ? stringValue.trim() : "";
   };
   const getCurrentAppDate = () => {
-    const formatter = new Intl.DateTimeFormat("en-CA", {
-      timeZone: APP_TIMEZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-
-    return formatter.format(new Date());
+    return formatInTimeZone(new Date(), APP_TIMEZONE, "yyyy-MM-dd");
   };
   const getCurrentAppWeekday = () => {
     const formatter = new Intl.DateTimeFormat("en-US", {
@@ -3351,37 +3335,23 @@ async function startServer() {
 
       // Helper to check if two dates are the same day in APP_TIMEZONE
       const isSameDateInTimezone = (date1: Date, date2: Date): boolean => {
-        const formatter = new Intl.DateTimeFormat("en-CA", {
-          timeZone: APP_TIMEZONE,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-        return formatter.format(date1) === formatter.format(date2);
+        const format1 = formatInTimeZone(date1, APP_TIMEZONE, "yyyy-MM-dd");
+        const format2 = formatInTimeZone(date2, APP_TIMEZONE, "yyyy-MM-dd");
+        return format1 === format2;
       };
 
       // Generate schedule for current week (Mon-Fri), showing from Monday to today
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       
-      // Get current date in APP_TIMEZONE (Asia/Manila for Render compatibility)
+      // Get current date in APP_TIMEZONE using date-fns-tz
       const getDateInTimezone = (date: Date) => {
-        const formatter = new Intl.DateTimeFormat("en-CA", {
-          timeZone: APP_TIMEZONE,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-        const parts = formatter.format(date).split("-");
-        return new Date(parts[0] + "-" + parts[1] + "-" + parts[2] + "T00:00:00");
+        const zonedDate = toZonedTime(date, APP_TIMEZONE);
+        return new Date(zonedDate.getFullYear(), zonedDate.getMonth(), zonedDate.getDate());
       };
 
       const getDayOfWeekInTimezone = (date: Date) => {
-        const formatter = new Intl.DateTimeFormat("en-US", {
-          timeZone: APP_TIMEZONE,
-          weekday: "long",
-        });
-        const dayName = formatter.format(date);
-        return daysOfWeek.indexOf(dayName);
+        const zonedDate = toZonedTime(date, APP_TIMEZONE);
+        return zonedDate.getDay();
       };
 
       const todayUTC = new Date();
@@ -3389,14 +3359,7 @@ async function startServer() {
       const todayDay = getDayOfWeekInTimezone(todayUTC);
       
       // Get current time in PHT for slot comparison
-      const currentTimeInPHT = new Intl.DateTimeFormat("en-US", {
-        timeZone: APP_TIMEZONE,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }).format(todayUTC);
-      
+      const currentTimeInPHT = formatInTimeZone(todayUTC, APP_TIMEZONE, "HH:mm:ss");
       const [currentHourStr, currentMinStr, currentSecStr] = currentTimeInPHT.split(":");
       const currentHourInPHT = parseInt(currentHourStr, 10);
       const currentMinInPHT = parseInt(currentMinStr, 10);
@@ -3490,15 +3453,8 @@ async function startServer() {
             const isSlotDateBeforeToday = date < today;
             const isSlotToday = isSameDateInTimezone(date, todayUTC);
             
-            // Get slot end time in PHT for time comparison
-            const slotEndTimeInPHT = new Intl.DateTimeFormat("en-US", {
-              timeZone: APP_TIMEZONE,
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-              hour12: false,
-            }).format(slotEnd);
-            
+            // Get slot end time in PHT for time comparison using date-fns-tz
+            const slotEndTimeInPHT = formatInTimeZone(slotEnd, APP_TIMEZONE, "HH:mm:ss");
             const [slotEndHourStr, slotEndMinStr] = slotEndTimeInPHT.split(":");
             const slotEndHourInPHT = parseInt(slotEndHourStr, 10);
             const slotEndMinInPHT = parseInt(slotEndMinStr, 10);
@@ -3510,22 +3466,8 @@ async function startServer() {
                           (isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
                            (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT)));
             
-            // Format timeString using PHT locale
-            const slotStartInPHT = new Intl.DateTimeFormat("en-US", {
-              timeZone: APP_TIMEZONE,
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: true,
-            }).format(slotStart);
-            
-            const slotEndInPHT = new Intl.DateTimeFormat("en-US", {
-              timeZone: APP_TIMEZONE,
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: true,
-            }).format(slotEnd);
-            
-            const timeString = `${slotStartInPHT} - ${slotEndInPHT}`;
+            // Format timeString using date-fns-tz
+            const timeString = formatInTimeZone(slotStart, APP_TIMEZONE, "hh:mm a") + " - " + formatInTimeZone(slotEnd, APP_TIMEZONE, "hh:mm a");
 
             daySchedule.slots.push({
               start: slotStart.toISOString(),
