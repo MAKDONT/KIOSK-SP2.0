@@ -6246,6 +6246,8 @@ async function startServer() {
           return;
         }
 
+        console.log(`\n⏰ [AUTO-ADVANCE CHECK] Found ${ongoingConsultations.length} waiting consultation(s)`);
+
         const now = new Date();
         
         // Get current time in PHT using date-fns-tz for Render compatibility
@@ -6255,11 +6257,18 @@ async function startServer() {
         const currentMinInPHT = parseInt(currentMinStr, 10);
         const currentTotalMinutesInPHT = currentHourInPHT * 60 + currentMinInPHT;
 
+        console.log(`   Current time (PHT): ${currentTimeInPHT} (${currentTotalMinutesInPHT} total minutes)`);
+
         for (const consultation of ongoingConsultations) {
-          if (!consultation.meet_link) continue;
+          if (!consultation.meet_link) {
+            console.log(`   ⚠️ Consultation ${consultation.id}: No meet_link, skipping`);
+            continue;
+          }
 
           const studentName = (consultation as any)?.students?.full_name || "Student";
           const timePart = consultation.meet_link;
+
+          console.log(`   📋 Checking consultation ${consultation.id} (${studentName}): meet_link = "${timePart}"`);
 
           // Parse end time from timePart
           // Format: "Saturday 05:00 AM - 05:15 AM" or "18:30-18:45"
@@ -6282,6 +6291,7 @@ async function startServer() {
 
               endHour = hour;
               endMin = min;
+              console.log(`      Parsed end time (AM/PM format): ${endHour}:${String(endMin).padStart(2, '0')}`);
             }
           } else {
             // Try format: "HH:MM-HH:MM" (extract end time)
@@ -6291,15 +6301,19 @@ async function startServer() {
               const [hourStr, minStr] = endTimeStr.split(':');
               endHour = parseInt(hourStr, 10);
               endMin = parseInt(minStr, 10);
+              console.log(`      Parsed end time (24h format): ${endHour}:${String(endMin).padStart(2, '0')}`);
             }
           }
 
           if (isNaN(endHour) || isNaN(endMin) || endHour < 0 || endMin < 0) {
+            console.log(`      ❌ Failed to parse time from: "${timePart}"`);
             continue;
           }
 
           const endTotalMinutes = endHour * 60 + endMin;
           const minutesPastEnd = currentTotalMinutesInPHT - endTotalMinutes;
+
+          console.log(`      End time: ${endTotalMinutes} minutes, Current: ${currentTotalMinutesInPHT} minutes, Diff: ${minutesPastEnd} min`);
 
           // If time has passed, auto-cancel this waiting consultation
           if (minutesPastEnd > 0) {
