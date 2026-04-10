@@ -2912,10 +2912,13 @@ async function startServer() {
           const now = new Date();
           const todayString = getCurrentAppDate();
           
-          // Parse time_period format: "Monday 09:00 AM - 09:15 AM"
+          // Parse time_period format: "Monday 09:00 AM - 09:15 AM" or similar
+          // Extract day name and times
+          const dayMatch = time_period.match(/^([a-zA-Z]+)/);
           const timeMatch = time_period.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
           
-          if (timeMatch) {
+          if (dayMatch && timeMatch) {
+            const dayName = dayMatch[1];
             let endHour = parseInt(timeMatch[4], 10);
             const endMin = parseInt(timeMatch[5], 10);
             const endAmPm = timeMatch[6].toUpperCase();
@@ -2924,7 +2927,14 @@ async function startServer() {
             if (endAmPm === 'PM' && endHour < 12) endHour += 12;
             if (endAmPm === 'AM' && endHour === 12) endHour = 0;
             
-            // Get current time in PHT
+            // Get current date and time in PHT
+            const currentDateInPHT = new Intl.DateTimeFormat("en-CA", {
+              timeZone: APP_TIMEZONE,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(now);
+            
             const currentTimeInPHT = new Intl.DateTimeFormat("en-US", {
               timeZone: APP_TIMEZONE,
               hour: "2-digit",
@@ -2937,8 +2947,24 @@ async function startServer() {
             const currentHour = parseInt(currentHourStr, 10);
             const currentMin = parseInt(currentMinStr, 10);
             
-            // Check if slot end time has passed (today only)
-            if (endHour < currentHour || (endHour === currentHour && endMin <= currentMin)) {
+            // Get current day name in PHT
+            const daysOfWeekNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+            const currentDayNameFormatter = new Intl.DateTimeFormat("en-US", {
+              timeZone: APP_TIMEZONE,
+              weekday: "long",
+            });
+            const currentDayName = currentDayNameFormatter.format(now);
+            
+            // Check if slot day is today
+            const isSlotToday = dayName.toLowerCase() === currentDayName.toLowerCase();
+            
+            // Check if slot date is in past relative to today
+            // Convert queue_date string (YYYY-MM-DD) to comparable format
+            const slotDateInPHT = getTodayStringPHT(); // This gets today's date in PHT
+            // Since time_period only has day name, not full date, we need to determine if it's past or future
+            // If it's today's day name and time has passed, or if it's a past day name, reject
+            
+            if (isSlotToday && (endHour < currentHour || (endHour === currentHour && endMin <= currentMin))) {
               return res.status(400).json({ 
                 error: "This time slot has already passed. Please select a future time slot." 
               });
@@ -3453,8 +3479,12 @@ async function startServer() {
 
             if (slotEnd > end) break;
 
-            // Determine if slot is past based on PHT current time
-            // Get slot end time in PHT (not system UTC)
+            // Determine if slot is past based on DATE and TIME in PHT
+            // Check if slot date is before today, or if it's today and time has passed
+            const isSlotDateBeforeToday = date < today;
+            const isSlotToday = isSameDateInTimezone(date, todayUTC);
+            
+            // Get slot end time in PHT for time comparison
             const slotEndTimeInPHT = new Intl.DateTimeFormat("en-US", {
               timeZone: APP_TIMEZONE,
               hour: "2-digit",
@@ -3467,10 +3497,12 @@ async function startServer() {
             const slotEndHourInPHT = parseInt(slotEndHourStr, 10);
             const slotEndMinInPHT = parseInt(slotEndMinStr, 10);
             
-            // Check if this slot day is today and its end time has passed
-            const isSlotToday = isSameDateInTimezone(date, todayUTC);
-            const isPast = isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
-                          (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT));
+            // Slot is past if:
+            // 1. Its date is before today (entire day passed), OR
+            // 2. Its date is today AND its end time has passed
+            const isPast = isSlotDateBeforeToday || 
+                          (isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
+                           (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT)));
             
             const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
 
