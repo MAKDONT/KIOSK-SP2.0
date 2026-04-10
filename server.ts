@@ -3467,11 +3467,17 @@ async function startServer() {
           const [startHour, startMin] = slot.start.split(":").map(Number);
           const [endHour, endMin] = slot.end.split(":").map(Number);
 
+          // PHT is UTC+8, so we need to convert PHT times to UTC times
+          // UTC time = PHT time - 8 hours
+          // Use setUTCHours to set the UTC time directly
+          const utcStartHour = (startHour - 8 + 24) % 24; // +24 then %24 to handle negative numbers
+          const utcEndHour = (endHour - 8 + 24) % 24;
+
           let current = new Date(date);
-          current.setHours(startHour, startMin, 0, 0);
+          current.setUTCHours(utcStartHour, startMin, 0, 0);
 
           const end = new Date(date);
-          end.setHours(endHour, endMin, 0, 0);
+          end.setUTCHours(utcEndHour, endMin, 0, 0);
 
           while (current < end) {
             const slotStart = new Date(current);
@@ -3504,7 +3510,22 @@ async function startServer() {
                           (isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
                            (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT)));
             
-            const timeString = `${slotStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })} - ${slotEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })}`;
+            // Format timeString using PHT locale
+            const slotStartInPHT = new Intl.DateTimeFormat("en-US", {
+              timeZone: APP_TIMEZONE,
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            }).format(slotStart);
+            
+            const slotEndInPHT = new Intl.DateTimeFormat("en-US", {
+              timeZone: APP_TIMEZONE,
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            }).format(slotEnd);
+            
+            const timeString = `${slotStartInPHT} - ${slotEndInPHT}`;
 
             daySchedule.slots.push({
               start: slotStart.toISOString(),
