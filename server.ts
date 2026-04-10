@@ -2903,11 +2903,20 @@ async function startServer() {
           
           if (dayMatch && timeMatch) {
             const dayName = dayMatch[1];
+            
+            // Parse START time
+            let startHour = parseInt(timeMatch[1], 10);
+            const startMin = parseInt(timeMatch[2], 10);
+            const startAmPm = timeMatch[3].toUpperCase();
+            
+            // Parse END time
             let endHour = parseInt(timeMatch[4], 10);
             const endMin = parseInt(timeMatch[5], 10);
             const endAmPm = timeMatch[6].toUpperCase();
             
             // Convert to 24-hour format
+            if (startAmPm === 'PM' && startHour < 12) startHour += 12;
+            if (startAmPm === 'AM' && startHour === 12) startHour = 0;
             if (endAmPm === 'PM' && endHour < 12) endHour += 12;
             if (endAmPm === 'AM' && endHour === 12) endHour = 0;
             
@@ -2942,16 +2951,19 @@ async function startServer() {
             // Check if slot day is today
             const isSlotToday = dayName.toLowerCase() === currentDayName.toLowerCase();
             
-            // Check if slot date is in past relative to today
-            // Convert queue_date string (YYYY-MM-DD) to comparable format
-            const slotDateInPHT = getTodayStringPHT(); // This gets today's date in PHT
-            // Since time_period only has day name, not full date, we need to determine if it's past or future
-            // If it's today's day name and time has passed, or if it's a past day name, reject
-            
-            if (isSlotToday && (endHour < currentHour || (endHour === currentHour && endMin <= currentMin))) {
-              return res.status(400).json({ 
-                error: "This time slot has already passed. Please select a future time slot." 
-              });
+            // Prevent booking if:
+            // 1. Slot is today AND start time has already passed, OR
+            // 2. Slot is today AND end time has already passed
+            if (isSlotToday) {
+              const startTimeInMinutes = startHour * 60 + startMin;
+              const endTimeInMinutes = endHour * 60 + endMin;
+              const currentTimeInMinutes = currentHour * 60 + currentMin;
+              
+              if (startTimeInMinutes <= currentTimeInMinutes) {
+                return res.status(400).json({ 
+                  error: `This time slot (${timeMatch[1]}:${timeMatch[2]} ${startAmPm}) has already started or passed. Please select a future time slot.` 
+                });
+              }
             }
           }
         } catch (timeValidationErr: any) {
@@ -3453,7 +3465,12 @@ async function startServer() {
             const isSlotDateBeforeToday = date < today;
             const isSlotToday = isSameDateInTimezone(date, todayUTC);
             
-            // Get slot end time in PHT for time comparison using date-fns-tz
+            // Get slot START and END times in PHT for time comparison using date-fns-tz
+            const slotStartTimeInPHT = formatInTimeZone(slotStart, APP_TIMEZONE, "HH:mm:ss");
+            const [slotStartHourStr, slotStartMinStr] = slotStartTimeInPHT.split(":");
+            const slotStartHourInPHT = parseInt(slotStartHourStr, 10);
+            const slotStartMinInPHT = parseInt(slotStartMinStr, 10);
+            
             const slotEndTimeInPHT = formatInTimeZone(slotEnd, APP_TIMEZONE, "HH:mm:ss");
             const [slotEndHourStr, slotEndMinStr] = slotEndTimeInPHT.split(":");
             const slotEndHourInPHT = parseInt(slotEndHourStr, 10);
@@ -3461,10 +3478,10 @@ async function startServer() {
             
             // Slot is past if:
             // 1. Its date is before today (entire day passed), OR
-            // 2. Its date is today AND its end time has passed
+            // 2. Its date is today AND its START time has already passed
             const isPast = isSlotDateBeforeToday || 
-                          (isSlotToday && (slotEndHourInPHT < currentHourInPHT || 
-                           (slotEndHourInPHT === currentHourInPHT && slotEndMinInPHT <= currentMinInPHT)));
+                          (isSlotToday && (slotStartHourInPHT < currentHourInPHT || 
+                           (slotStartHourInPHT === currentHourInPHT && slotStartMinInPHT <= currentMinInPHT)));
             
             // Format timeString using date-fns-tz
             const timeString = formatInTimeZone(slotStart, APP_TIMEZONE, "hh:mm a") + " - " + formatInTimeZone(slotEnd, APP_TIMEZONE, "hh:mm a");
