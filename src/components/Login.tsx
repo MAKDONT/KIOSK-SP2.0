@@ -36,6 +36,11 @@ interface LiveQueueItem {
   consultation_date_display?: string | null;
 }
 
+const formatLiveMonitorTime = (timePeriod?: string | null) => {
+  if (!timePeriod) return "Walk-in";
+  return timePeriod.replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+/i, "");
+};
+
 export default function Login() {
   const [inputMode, setInputMode] = useState<"scan" | "manual">("scan");
   
@@ -643,7 +648,7 @@ export default function Login() {
                       <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
                       {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{item.time_period || 'Walk-in'}</strong></p>
+                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
                     </div>
                   ))}
                 </div>
@@ -665,7 +670,7 @@ export default function Login() {
                       <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
                       <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
                       {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{item.time_period || 'Walk-in'}</strong></p>
+                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
                     </div>
                   ))}
                 </div>
