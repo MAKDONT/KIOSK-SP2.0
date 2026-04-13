@@ -1,6 +1,6 @@
-﻿import { useEffect, useState, type FormEvent } from "react";
+﻿import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, LogIn, Users } from "lucide-react";
+import { ArrowLeft, LogIn, Users, Mail } from "lucide-react";
 import { getStaffSessionUserId, setStaffSession } from "../staffSession";
 
 export default function StaffLogin() {
@@ -8,13 +8,37 @@ export default function StaffLogin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState("");
+  const oauthWindowRef = useRef<Window | null>(null);
 
   useEffect(() => {
     const staffUserId = getStaffSessionUserId();
     if (staffUserId) {
       navigate(`/faculty/${staffUserId}`);
     }
+  }, [navigate]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+
+      if (data.type === "FACULTY_LOGIN_SUCCESS" && data.facultyId) {
+        oauthWindowRef.current = null;
+        setGoogleLoading(false);
+        setError("");
+        setStaffSession(String(data.facultyId));
+        navigate(`/faculty/${data.facultyId}`);
+      } else if (data.type === "FACULTY_LOGIN_ERROR") {
+        oauthWindowRef.current = null;
+        setGoogleLoading(false);
+        setError(data.error || "Google login failed");
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
   }, [navigate]);
 
   const handleLogin = async (e: FormEvent) => {
@@ -38,6 +62,34 @@ export default function StaffLogin() {
       setError(err.message || "Failed to login");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/faculty/google/login-url");
+      const data = await res.json();
+      if (!data.url) throw new Error("Failed to get Google login URL");
+
+      const w = 500;
+      const h = 650;
+      const left = window.screenX + (window.outerWidth - w) / 2;
+      const top = window.screenY + (window.outerHeight - h) / 2;
+
+      oauthWindowRef.current = window.open(
+        data.url,
+        "FacultyGoogleLogin",
+        `width=${w},height=${h},left=${left},top=${top}`
+      );
+
+      if (!oauthWindowRef.current) {
+        throw new Error("Popup blocked. Please allow popups and try again.");
+      }
+    } catch (err: any) {
+      setGoogleLoading(false);
+      setError(err.message || "Google login failed");
     }
   };
 
@@ -92,11 +144,26 @@ export default function StaffLogin() {
 
           <button
             type="submit"
-            disabled={loading || !email.trim() || !password.trim()}
+            disabled={loading || googleLoading || !email.trim() || !password.trim()}
             className="w-full flex items-center justify-center gap-2 py-4 px-4 text-white text-lg font-bold rounded-2xl transition-colors" style={{ background: 'var(--clay-accent-lavender)' }}
           >
             <LogIn className="w-5 h-5" />
             {loading ? "Signing in..." : "Sign In"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            disabled={loading || googleLoading}
+            className="w-full flex items-center justify-center gap-2 py-4 px-4 text-lg font-bold rounded-2xl border-2 transition-colors disabled:opacity-60"
+            style={{
+              borderColor: 'var(--clay-border)',
+              color: 'var(--clay-text-primary)',
+              background: 'var(--clay-bg-secondary)'
+            }}
+          >
+            <Mail className="w-5 h-5" />
+            {googleLoading ? "Opening Google..." : "Sign In with Google"}
           </button>
         </form>
       </div>

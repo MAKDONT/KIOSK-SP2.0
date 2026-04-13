@@ -1185,7 +1185,7 @@ async function startServer() {
 
   type OAuthState = {
     redirectUri?: string;
-    role?: "admin" | "faculty" | "admin_login" | "admin_reset";
+    role?: "admin" | "faculty" | "admin_login" | "admin_reset" | "faculty_login";
     facultyId?: string;
   };
   type OAuthAuthContext = { mode: "oauth"; auth: any; tokens: any; redirectUri: string };
@@ -1604,6 +1604,24 @@ async function startServer() {
       res.json({ url });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Faculty: Google OAuth login URL (login is allowed only for emails registered in faculty records)
+  app.get("/api/faculty/google/login-url", (req, res) => {
+    try {
+      const redirectUri = resolveOAuthRedirectUri(req);
+      const oauth2Client = getOAuth2Client(redirectUri);
+      const url = oauth2Client.generateAuthUrl({
+        access_type: "offline",
+        scope: [GOOGLE_USERINFO_EMAIL_SCOPE],
+        state: encodeOAuthState({ redirectUri, role: "faculty_login" }),
+        prompt: "select_account",
+      });
+      res.json({ url });
+    } catch (err: any) {
+      console.error("Faculty login OAuth URL generation error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -4603,6 +4621,61 @@ async function startServer() {
         });
       }
 
+      // Handle faculty login via Google OAuth (email must match an existing faculty record)
+      if (stateObj.role === "faculty_login") {
+        oauth2Client.setCredentials(tokens);
+        let accountEmail: string | null = null;
+        try {
+          accountEmail = await getGoogleAccountEmail(oauth2Client);
+        } catch (emailErr) {
+          console.warn("Faculty login Google email lookup failed:", emailErr);
+        }
+
+        if (!accountEmail) {
+          return sendOAuthResponse({
+            type: "FACULTY_LOGIN_ERROR",
+            error: "Could not retrieve Google account email.",
+            message: "Could not retrieve Google account email.",
+          });
+        }
+
+        const normalizedEmail = normalizeEmail(accountEmail);
+        const { data: facultyRecord, error: facultyLookupError } = await getSupabase()
+          .from("faculty")
+          .select("id, email, name")
+          .eq("email", normalizedEmail)
+          .maybeSingle();
+
+        if (facultyLookupError) {
+          console.error("Faculty login lookup error:", facultyLookupError);
+          return sendOAuthResponse({
+            type: "FACULTY_LOGIN_ERROR",
+            error: "Failed to verify faculty account.",
+            message: "Failed to verify faculty account.",
+          });
+        }
+
+        if (!facultyRecord) {
+          return sendOAuthResponse({
+            type: "FACULTY_LOGIN_ERROR",
+            error: "This Google account is not registered as a faculty account. Please use the email provided by admin.",
+            message: "Unauthorized Google account.",
+          });
+        }
+
+        await logAudit("faculty_login_success_google", {
+          faculty_id: facultyRecord.id,
+          faculty_email: normalizedEmail,
+        }, req);
+
+        return sendOAuthResponse({
+          type: "FACULTY_LOGIN_SUCCESS",
+          facultyId: facultyRecord.id,
+          email: normalizedEmail,
+          message: "Faculty login successful. This window should close automatically.",
+        });
+      }
+
       const mergedTokens = { ...(getAdminTokens() || {}), ...tokens };
       saveAdminTokens(mergedTokens, redirectUri);
 
@@ -4615,6 +4688,7 @@ async function startServer() {
       const role = stateObj.role || "";
       const errorTypeMap: Record<string, string> = {
         faculty: "FACULTY_GOOGLE_AUTH_ERROR",
+        faculty_login: "FACULTY_LOGIN_ERROR",
         admin_login: "ADMIN_LOGIN_ERROR",
         admin_reset: "ADMIN_RESET_ERROR",
       };
