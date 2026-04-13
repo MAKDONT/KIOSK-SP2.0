@@ -32,10 +32,11 @@ export default function KioskView() {
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
   const [expandedFaculty, setExpandedFaculty] = useState<string | null>(null);
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
   const [consultationConcern, setConsultationConcern] = useState("");
-  const [bookedSlots, setBookedSlots] = useState<{faculty_id: string, time_period: string}[]>([]);
+  const [bookedSlots, setBookedSlots] = useState<{faculty_id: string, time_period: string, queue_date?: string | null}[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState("");
@@ -198,7 +199,7 @@ export default function KioskView() {
   };
 
   const handleJoinQueue = async () => {
-    if (!studentId || !selectedFaculty || !selectedTimePeriod) {
+    if (!studentId || !selectedFaculty || !selectedTimePeriod || !selectedDate) {
       setError("Please select a faculty member and choose a time slot.");
       return;
     }
@@ -222,7 +223,8 @@ export default function KioskView() {
           student_email: studentEmail,
           course: course,
           purpose: consultationConcern.trim(),
-          time_period: selectedTimePeriod,
+          time_period: selectedDay ? `${selectedDay} ${selectedTimePeriod}` : selectedTimePeriod,
+          queue_date: selectedDate,
         }),
       });
 
@@ -411,6 +413,7 @@ export default function KioskView() {
                               setSelectedFaculty(f.id);
                               setSelectedTimePeriod(slot.timeString);
                               setSelectedDate(date);
+                                setSelectedDay(day);
                             }}
                           />
                         </div>
@@ -449,7 +452,7 @@ export default function KioskView() {
             </div>
             <button
               onClick={handleJoinQueue}
-              disabled={loading || !studentId || !selectedFaculty || !selectedTimePeriod || !consultationConcern.trim()}
+              disabled={loading || !studentId || !selectedFaculty || !selectedTimePeriod || !selectedDate || !consultationConcern.trim()}
               className="w-full py-8 disabled:opacity-50 disabled:cursor-not-allowed text-white text-3xl font-bold rounded-2xl transition-all active:scale-95 flex items-center justify-center gap-4 min-h-[100px] btn btn-primary"
             >
               {loading ? "Processing..." : <>

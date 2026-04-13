@@ -2707,6 +2707,7 @@ async function startServer() {
       }
       
       const { availability } = req.body;
+      const allowedDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
       if (!availability) {
         return res.status(400).json({ error: "Availability data is required" });
       }
@@ -2720,6 +2721,14 @@ async function startServer() {
         JSON.stringify(availability); // Ensure serializable
       } catch (parseErr: any) {
         return res.status(400).json({ error: "Invalid availability format" });
+      }
+
+      for (let i = 0; i < availability.length; i++) {
+        const slot = availability[i];
+        const day = typeof slot?.day === "string" ? slot.day : typeof slot?.day_name === "string" ? slot.day_name : "";
+        if (!allowedDays.includes(day)) {
+          return res.status(400).json({ error: `Invalid day in availability slot ${i + 1}. Only Monday to Friday are allowed.` });
+        }
       }
 
       const { data, error } = await getSupabase()
@@ -2857,7 +2866,16 @@ async function startServer() {
         return res.status(400).json({ error: validationErr.message });
       }
 
-      const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period } = req.body;
+      const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period, queue_date: requestedQueueDate } = req.body;
+      const todayString = getCurrentAppDate();
+      const queueDateToUse =
+        typeof requestedQueueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(requestedQueueDate.trim())
+          ? requestedQueueDate.trim()
+          : todayString;
+
+      if (queueDateToUse < todayString) {
+        return res.status(400).json({ error: "Selected consultation date has already passed. Please select a future date." });
+      }
 
       // Get ALL faculty (regardless of status) to check availability slots
       // Faculty availability should be visible even if they're currently in a consultation/busy
@@ -2912,7 +2930,6 @@ async function startServer() {
       if (time_period) {
         try {
           const now = new Date();
-          const todayString = getCurrentAppDate();
           
           // Parse time_period format: "Monday 09:00 AM - 09:15 AM" or similar
           // Extract day name and times
@@ -2938,14 +2955,6 @@ async function startServer() {
             if (endAmPm === 'PM' && endHour < 12) endHour += 12;
             if (endAmPm === 'AM' && endHour === 12) endHour = 0;
             
-            // Get current date and time in PHT
-            const currentDateInPHT = new Intl.DateTimeFormat("en-CA", {
-              timeZone: APP_TIMEZONE,
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-            }).format(now);
-            
             const currentTimeInPHT = new Intl.DateTimeFormat("en-US", {
               timeZone: APP_TIMEZONE,
               hour: "2-digit",
@@ -2959,22 +2968,21 @@ async function startServer() {
             const currentMin = parseInt(currentMinStr, 10);
             
             // Get current day name in PHT
-            const daysOfWeekNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
             const currentDayNameFormatter = new Intl.DateTimeFormat("en-US", {
               timeZone: APP_TIMEZONE,
               weekday: "long",
             });
             const currentDayName = currentDayNameFormatter.format(now);
             
-            // Check if slot day is today
-            const isSlotToday = dayName.toLowerCase() === currentDayName.toLowerCase();
-            
-            // Prevent booking if:
-            // 1. Slot is today AND start time has already passed, OR
-            // 2. Slot is today AND end time has already passed
-            if (isSlotToday) {
+            // For advance booking: only block by time-of-day when booking date is today.
+            // Future dates are allowed; past dates were already rejected above.
+            const isBookingDateToday = queueDateToUse === todayString;
+
+            // Backward compatibility: if queue_date wasn't explicitly provided, fall back to day-name check.
+            const isSlotTodayByDayName = dayName.toLowerCase() === currentDayName.toLowerCase();
+
+            if (isBookingDateToday || (!requestedQueueDate && isSlotTodayByDayName)) {
               const startTimeInMinutes = startHour * 60 + startMin;
-              const endTimeInMinutes = endHour * 60 + endMin;
               const currentTimeInMinutes = currentHour * 60 + currentMin;
               
               if (startTimeInMinutes <= currentTimeInMinutes) {
@@ -3042,15 +3050,14 @@ async function startServer() {
 
       // Check if faculty already has a consultation at the same time slot
       if (faculty_id && time_period) {
-        const today = getCurrentAppDate();
-        console.log(`🔍 Checking double-booking: Faculty ${faculty_id}, Date: ${today}, Time: ${time_period}`);
+        console.log(`🔍 Checking double-booking: Faculty ${faculty_id}, Date: ${queueDateToUse}, Time: ${time_period}`);
         
         // Fetch all active consultations for this faculty today
         const { data: allConsultations, error: consultationError } = await getSupabase()
           .from("queue")
           .select("*")
           .eq("faculty_id", faculty_id)
-          .eq("queue_date", today)
+          .eq("queue_date", queueDateToUse)
           .in("status", ["waiting", "serving", "ongoing"]);
 
         if (consultationError) {
@@ -3124,7 +3131,6 @@ async function startServer() {
         // Still proceed - we'll generate it again in the scheduler if needed
       }
 
-      const today = getCurrentAppDate();
       const queueInsertBase = {
         student_id: student.id,
         faculty_id,
@@ -3132,7 +3138,7 @@ async function startServer() {
         student_email: targetEmail || null,
         meet_link: meetLinkToSave,
         time_period: time_period || null,
-        queue_date: today,
+        queue_date: queueDateToUse,
       };
       const insertWithFallback = async (options: {
         includeQueueNumber: boolean;
@@ -3200,7 +3206,7 @@ async function startServer() {
       };
 
       const info = await withQueueLock(
-        `${faculty_id || "unassigned"}:${today}`,
+        `${faculty_id || "unassigned"}:${queueDateToUse}`,
         async () => {
           let nextQueueNumber: string | null = null;
           let nextPosition: number | null = null;
@@ -3211,7 +3217,7 @@ async function startServer() {
               .from("queue")
               .select("queue_number")
               .eq("faculty_id", faculty_id)
-              .eq("queue_date", today)
+              .eq("queue_date", queueDateToUse)
               .order("queue_number", { ascending: false })
               .limit(1)
               .maybeSingle();
@@ -3312,11 +3318,11 @@ async function startServer() {
     try {
       const today = getCurrentAppDate();
       
-      // Fetch all active queue entries for today with their meet_link
+      // Fetch all active queue entries from today onward for advance booking visibility.
       const { data, error } = await getSupabase()
         .from("queue")
-        .select("faculty_id, meet_link")
-        .eq("queue_date", today)
+        .select("faculty_id, meet_link, time_period, queue_date")
+        .gte("queue_date", today)
         .in("status", ["waiting", "serving", "ongoing"]);
 
       if (error) {
@@ -3324,14 +3330,16 @@ async function startServer() {
         throw error;
       }
 
-      // Parse time_period from meet_link (format: "time_period|googleMeetLink")
+      // Read time_period directly when available; fallback to meet_link prefix for backward compatibility.
       const bookedSlots = (data || [])
         .map((q: any) => {
           const parts = q.meet_link ? String(q.meet_link).split('|') : [];
-          const timeSlot = parts.length > 0 ? parts[0] : null;
+          const fallbackTimeSlot = parts.length > 0 ? parts[0] : null;
+          const timeSlot = q.time_period || fallbackTimeSlot;
           return {
             faculty_id: q.faculty_id,
-            time_period: timeSlot
+            time_period: timeSlot,
+            queue_date: q.queue_date || null,
           };
         })
         .filter((q: any) => q.time_period && q.faculty_id);
@@ -3370,7 +3378,7 @@ async function startServer() {
         return format1 === format2;
       };
 
-      // Generate schedule for current week (Mon-Fri), showing from Monday to today
+      // Generate schedule for advance booking (today + next weekdays).
       const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       
       // Get current date in APP_TIMEZONE using date-fns-tz
@@ -3394,34 +3402,16 @@ async function startServer() {
       const currentHourInPHT = parseInt(currentHourStr, 10);
       const currentMinInPHT = parseInt(currentMinStr, 10);
       
-      
-      // If today is weekend (Sat/Sun), show current week Mon-Fri
-      // If today is weekday (Mon-Fri), show Mon through today
       const datesToShow: Date[] = [];
-      
-      // Calculate days to go back to get to Monday
-      let daysToMonday = 0;
-      if (todayDay === 0) {
-        // Today is Sunday, go back 2 days to Monday of this week
-        daysToMonday = -2;
-      } else if (todayDay === 6) {
-        // Today is Saturday, go back 1 day to Friday (show Mon-Fri of this week)
-        daysToMonday = -1;
-      } else {
-        // Today is Mon-Fri, go back to Monday of this week
-        daysToMonday = -(todayDay - 1);
-      }
-      
-      // Get Monday date (in timezone-aware manner)
-      const monday = new Date(today);
-      monday.setDate(monday.getDate() + daysToMonday);
-      
-      // Collect dates from Monday to today (or Friday if today is weekend)
-      const endDay = todayDay === 0 || todayDay === 6 ? 5 : todayDay; // If weekend, show through Friday; otherwise show through today
-      for (let i = 0; i < endDay; i++) {
-        const date = new Date(monday);
-        date.setDate(date.getDate() + i);
-        datesToShow.push(date);
+
+      // Show next 5 weekdays from today (skips weekends).
+      const cursor = new Date(today);
+      while (datesToShow.length < 5) {
+        const dayIdx = cursor.getDay();
+        if (dayIdx !== 0 && dayIdx !== 6) {
+          datesToShow.push(new Date(cursor));
+        }
+        cursor.setDate(cursor.getDate() + 1);
       }
       
       const schedule: any[] = [];

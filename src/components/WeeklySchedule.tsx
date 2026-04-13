@@ -20,7 +20,7 @@ interface WeeklyScheduleProps {
   facultyName: string;
   onSlotSelect: (slot: ScheduleSlot, date: string, day: string) => void;
   selectedSlot?: { date: string; timeString: string } | null;
-  bookedSlots?: { faculty_id: string; time_period: string }[];
+  bookedSlots?: { faculty_id: string; time_period: string; queue_date?: string | null }[];
 }
 
 export function WeeklySchedule({
@@ -115,10 +115,12 @@ export function WeeklySchedule({
   };
 
   const isSlotBooked = (slot: ScheduleSlot) => {
+    const prefixedSlot = `${currentDay.day} ${slot.timeString}`;
     return bookedSlots.some(
       (bs) =>
         bs.faculty_id === facultyId &&
-        bs.time_period === slot.timeString
+        (bs.queue_date ? bs.queue_date === currentDay.date : true) &&
+        (bs.time_period === slot.timeString || bs.time_period === prefixedSlot)
     );
   };
 

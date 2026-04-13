@@ -33,6 +33,8 @@ interface RecordingContext {
   studentNumber: string;
 }
 
+const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
 const readJsonResponse = async (response: Response, fallbackMessage: string) => {
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
@@ -943,6 +945,10 @@ export default function FacultyDashboard() {
         alert(`Time Slot ${i + 1} is incomplete. Please fill in all fields (Day, Start Time, End Time).`);
         return;
       }
+      if (!WEEKDAY_OPTIONS.includes(slot.day)) {
+        alert(`Time Slot ${i + 1} has an invalid day. Only Monday to Friday are allowed.`);
+        return;
+      }
     }
 
     try {
@@ -1464,7 +1470,7 @@ export default function FacultyDashboard() {
                           onChange={(e) => updateSlot(index, "day", e.target.value)}
                           className="w-full px-3 py-2 rounded-lg border border-neutral-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white"
                         >
-                          {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => (
+                          {WEEKDAY_OPTIONS.map(day => (
                             <option key={day} value={day}>{day}</option>
                           ))}
                         </select>
