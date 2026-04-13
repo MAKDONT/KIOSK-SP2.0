@@ -3688,7 +3688,7 @@ async function startServer() {
       let { data, error } = await getSupabase()
         .from("queue")
         .select(`
-          id, student_id, status, created_at, meet_link, purpose,
+          id, student_id, status, created_at, queue_date, meet_link, purpose,
           students (full_name, student_number)
         `)
         .eq("faculty_id", req.params.faculty_id)
@@ -3705,7 +3705,7 @@ async function startServer() {
           const fallback = await getSupabase()
             .from("queue")
             .select(`
-              id, student_id, status, created_at, meet_link,
+              id, student_id, status, created_at, queue_date, meet_link,
               students (full_name, student_number)
             `)
             .eq("faculty_id", req.params.faculty_id)
@@ -4100,6 +4100,8 @@ async function startServer() {
   }, 60 * 60 * 1000); // Run every hour
 
   // Auto-expire waiting consultations that have passed their time period
+  // DISABLED: Consultations should stay in queue until faculty manually serves them
+  /* DISABLED
   setInterval(async () => {
     try {
       const { data: waitingQueue } = await getSupabase()
@@ -4178,6 +4180,7 @@ async function startServer() {
       console.error("[Auto-Expire] Error:", err);
     }
   }, 60 * 1000); // Run every minute
+  END DISABLED */
 
   // Google Drive OAuth and Upload
   const getOAuth2Client = (redirectUri?: string) => {
@@ -6256,7 +6259,7 @@ async function startServer() {
         const { data: ongoingConsultations, error: fetchError } = await retryWithBackoff(async () => {
           return await getSupabase()
             .from("queue")
-            .select("id, student_id, student_email, meet_link, faculty_id, status, students(full_name, email), faculty(name, full_name)")
+            .select("id, student_id, student_email, meet_link, time_period, queue_date, faculty_id, status, students(full_name, email), faculty(name, full_name)")
             .eq("status", "waiting");
         }, 2, 500);
 
@@ -6272,6 +6275,7 @@ async function startServer() {
         console.log(`\n⏰ [AUTO-ADVANCE CHECK] Found ${ongoingConsultations.length} waiting consultation(s)`);
 
         const now = new Date();
+        const todayPHT = formatInTimeZone(now, APP_TIMEZONE, "yyyy-MM-dd");
         
         // Get current time in PHT using date-fns-tz for Render compatibility
         const currentTimeInPHT = formatInTimeZone(now, APP_TIMEZONE, "HH:mm:ss");
@@ -6283,13 +6287,87 @@ async function startServer() {
         console.log(`   Current time (PHT): ${currentTimeInPHT} (${currentTotalMinutesInPHT} total minutes)`);
 
         for (const consultation of ongoingConsultations) {
-          if (!consultation.meet_link) {
-            console.log(`   ⚠️ Consultation ${consultation.id}: No meet_link, skipping`);
+          const studentName = (consultation as any)?.students?.full_name || "Student";
+          const meetLinkRaw = consultation.meet_link || "";
+          const timePeriodRaw = consultation.time_period || "";
+          const meetLinkParts = meetLinkRaw.split("|");
+          const parsedFromMeetLink = meetLinkParts.length > 1 ? meetLinkParts[0].trim() : "";
+          const timePart = String(timePeriodRaw || parsedFromMeetLink || meetLinkRaw || "").trim();
+
+          if (!timePart || (!timePart.includes("AM") && !timePart.includes("PM") && !timePart.includes("-"))) {
+            console.log(`   ⚠️ Consultation ${consultation.id}: No parseable time_period/meet_link, skipping`);
             continue;
           }
 
-          const studentName = (consultation as any)?.students?.full_name || "Student";
-          const timePart = consultation.meet_link;
+          const queueDate = String(consultation.queue_date || "").trim();
+
+          if (queueDate && queueDate < todayPHT) {
+            console.log(`      Queue date ${queueDate} is before today ${todayPHT} -> expired`);
+            try {
+              const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
+              const facultyName = (consultation as any)?.faculty?.full_name || (consultation as any)?.faculty?.name || "Faculty Member";
+
+              const { error: updateError } = await getSupabase()
+                .from("queue")
+                .update({ status: "cancelled" })
+                .eq("id", consultation.id);
+
+              if (updateError) {
+                console.error(`   ❌ Failed to update:`, updateError.message);
+              } else {
+                console.log(`   ✅ Auto-removed from queue (past date)`);
+
+                if (studentEmail) {
+                  const emailSubject = "Consultation Schedule Expired - EARIST Queue Management System";
+                  const emailHtml = `
+                    <div style="font-family: Arial, sans-serif; background-color: #f5f1ed; padding: 20px;">
+                      <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <h2 style="color: #d84d42; margin-top: 0;">Consultation Schedule Expired</h2>
+
+                        <p>Dear ${studentName},</p>
+
+                        <p>Your consultation with <strong>${facultyName}</strong> has expired and was automatically removed from the queue.</p>
+
+                        <div style="background-color: #f9f1eb; border-left: 4px solid #d84d42; padding: 15px; margin: 20px 0;">
+                          <p style="margin: 5px 0;"><strong>Scheduled Time:</strong> ${timePart}</p>
+                          <p style="margin: 5px 0;"><strong>Consultation ID:</strong> #${consultation.id}</p>
+                        </div>
+
+                        <p style="color: #666;">Please queue again next time by selecting a new available schedule in the system.</p>
+
+                        <p style="color: #999; font-size: 12px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+                          This is an automated notification from the EARIST Queue Management System. Please do not reply to this email.
+                        </p>
+                      </div>
+                    </div>
+                  `;
+
+                  await sendEmailNotification(studentEmail, emailSubject, emailHtml);
+                  console.log(`   📧 Expiration email sent to ${studentEmail}`);
+                }
+
+                await logAudit("consultation_auto_removed", {
+                  consultation_id: consultation.id,
+                  student_id: consultation.student_id,
+                  student_name: studentName,
+                  student_email: studentEmail,
+                  reason: "no_show_time_expired",
+                  minutes_past_end: null,
+                  scheduled_time: timePart,
+                  faculty_name: facultyName,
+                });
+                broadcast("queue_updated", { faculty_id: consultation.faculty_id });
+              }
+            } catch (err) {
+              console.error(`   ❌ Error during auto-advance:`, err);
+            }
+            continue;
+          }
+
+          if (queueDate && queueDate > todayPHT) {
+            console.log(`      Queue date ${queueDate} is in the future -> not expiring yet`);
+            continue;
+          }
 
           console.log(`   📋 Checking consultation ${consultation.id} (${studentName}): meet_link = "${timePart}"`);
 
@@ -6376,6 +6454,7 @@ async function startServer() {
                         </div>
                         
                         <p style="color: #666;">Since you were not attended to during your scheduled time slot and did not join the queue before it expired, your consultation has been automatically removed from the queue.</p>
+                        <p style="color: #666; margin-top: 10px;"><strong>Please queue again next time</strong> by selecting a new available schedule in the system.</p>
                         
                         <h3 style="color: #333; margin-top: 25px;">What to do next?</h3>
                         <ul style="color: #666; line-height: 1.8;">
@@ -6426,6 +6505,9 @@ async function startServer() {
     const intervalId = setInterval(() => {
       autoAdvanceQueue();
     }, 60 * 1000); // 60 seconds
+
+    // Run once on startup so already-expired rows are cleared immediately.
+    autoAdvanceQueue();
 
     console.log("⏰ Queue auto-advance scheduler started (checks every 60 seconds)");
     console.log("   ✅ Auto-cancels WAITING consultations if their scheduled time has passed");
