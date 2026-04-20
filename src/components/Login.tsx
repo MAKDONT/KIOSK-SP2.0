@@ -624,14 +624,7 @@ export default function Login() {
         {/* Live Monitor Sidebar - Only show if faculty available */}
         {availableFaculty.length > 0 && (
         <div className="mt-8 pt-8 border-t-2" style={{ borderColor: 'var(--clay-border)' }}>
-          <h2 className="text-2xl font-bold mb-6 flex items-center gap-3" style={{ color: 'var(--clay-text-primary)' }}>
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ backgroundColor: 'var(--clay-accent-sage)' }}></span>
-              <span className="relative inline-flex rounded-full h-3 w-3" style={{ backgroundColor: 'var(--clay-accent-sage)' }}></span>
-            </span>
-            Live Monitor
-          </h2>
-          
+
           <div className="space-y-4">
             {/* Serving Students (Ongoing Consultations) */}
             {liveQueue.filter(item => item.status === "serving").length > 0 && (

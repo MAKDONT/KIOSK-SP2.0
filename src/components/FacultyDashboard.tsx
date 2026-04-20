@@ -106,7 +106,7 @@ export default function FacultyDashboard() {
 
   const logoutStaff = () => {
     clearStaffSession();
-    navigate("/staff/login");
+    navigate("/faculty/login");
   };
 
   const playNotificationSound = (data: any) => {
@@ -166,7 +166,7 @@ export default function FacultyDashboard() {
   useEffect(() => {
     const staffUserId = getStaffSessionUserId();
     if (!staffUserId) {
-      navigate("/staff/login");
+      navigate("/faculty/login");
       return;
     }
 

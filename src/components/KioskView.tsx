@@ -30,6 +30,7 @@ export default function KioskView() {
   const course = safeGetItem("student_course", "");
   
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
+  const [expandedDepartment, setExpandedDepartment] = useState<string | null>(null);
   const [expandedFaculty, setExpandedFaculty] = useState<string | null>(null);
   const [selectedTimePeriod, setSelectedTimePeriod] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -272,6 +273,25 @@ export default function KioskView() {
       return false;
     }
   });
+
+  const departmentGroups = Object.entries(
+    availableFaculty.reduce<Record<string, Faculty[]>>((acc, item) => {
+      const departmentName = item.department || "Unassigned Department";
+      if (!acc[departmentName]) {
+        acc[departmentName] = [];
+      }
+      acc[departmentName].push(item);
+      return acc;
+    }, {})
+  )
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([department, facultyList]) => ({ department, facultyList }));
+
+  const activeDepartment =
+    expandedDepartment && departmentGroups.some((group) => group.department === expandedDepartment)
+      ? expandedDepartment
+      : null;
+
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
       {/* Header */}
@@ -353,74 +373,108 @@ export default function KioskView() {
                   </button>
                 </motion.div>
               ) : (
-                availableFaculty.map((f) => {
-                  const timeRange = getAvailabilityRange(f);
-                  return (
-                  <motion.div
-                    key={f.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ duration: 0.3 }}
-                    className="rounded-2xl card transition-all duration-300 cursor-pointer"
-                    onClick={() => setExpandedFaculty(expandedFaculty === f.id ? null : f.id)}
-                    style={{
-                      background: f.status === "busy"
-                        ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
-                        : 'linear-gradient(135deg, rgba(168, 213, 186, 0.25) 0%, rgba(168, 213, 186, 0.1) 100%)',
-                      borderColor: expandedFaculty === f.id ? 'var(--clay-accent-warm)' : (f.status === 'busy' ? 'rgba(232, 180, 168, 0.4)' : 'rgba(168, 213, 186, 0.5)'),
-                      borderWidth: expandedFaculty === f.id ? '3px' : '2px',
-                      boxShadow: expandedFaculty === f.id 
-                        ? '0 12px 35px var(--clay-shadow-medium), inset 0 1px 0 rgba(255, 255, 255, 0.6)'
-                        : '0 4px 20px var(--clay-shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.5)',
-                      transition: 'borderColor 0.3s, borderWidth 0.3s, boxShadow 0.3s'
-                    }}
-                  >
-                    <div className="p-4">
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
-                          <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-3 py-1 rounded-full text-xs font-bold badge whitespace-nowrap ${
-                            f.status === 'busy' ? 'badge-warning' : 'badge-success'
-                          }`} style={{ color: 'white' }}>
-                            {f.status.toUpperCase()}
-                          </span>
-                          {expandedFaculty === f.id ? (
-                            <ChevronUp className="w-5 h-5" style={{ color: 'var(--clay-text-secondary)' }} />
-                          ) : (
-                            <ChevronDown className="w-5 h-5" style={{ color: 'var(--clay-text-secondary)' }} />
-                          )}
-                        </div>
-                      </div>
-                      
+                departmentGroups.map((group) => {
+                  const isDepartmentExpanded = activeDepartment === group.department;
 
-                      {/* Expanded Weekly Schedule */}
-                      {expandedFaculty === f.id && (
-                        <div
-                          className="mt-4 pt-4 border-t overflow-hidden transition-opacity duration-150"
-                          style={{ borderColor: 'rgba(0,0,0,0.1)' }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <WeeklySchedule
-                            facultyId={f.id}
-                            facultyName={f.name}
-                            bookedSlots={bookedSlots}
-                            selectedSlot={selectedFaculty === f.id && selectedTimePeriod && selectedDate ? { date: selectedDate, timeString: selectedTimePeriod } : null}
-                            onSlotSelect={(slot, date, day) => {
-                              setSelectedFaculty(f.id);
-                              setSelectedTimePeriod(slot.timeString);
-                              setSelectedDate(date);
-                                setSelectedDay(day);
-                            }}
-                          />
+                  return (
+                    <motion.div
+                      key={group.department}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ duration: 0.3 }}
+                      className="rounded-2xl card"
+                      style={{
+                        background: 'linear-gradient(135deg, var(--clay-bg-secondary) 0%, var(--clay-bg-tertiary) 100%)',
+                        borderColor: 'var(--clay-border-accent)'
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setExpandedDepartment(isDepartmentExpanded ? null : group.department)}
+                        className="w-full p-4 flex items-center justify-between gap-3 text-left"
+                      >
+                        <div>
+                          <p className="text-lg sm:text-xl font-bold uppercase" style={{ color: 'var(--clay-text-primary)' }}>
+                            {group.department}
+                          </p>
+                          <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>
+                            {group.facultyList.length} faculty member{group.facultyList.length > 1 ? 's' : ''}
+                          </p>
+                        </div>
+                        {isDepartmentExpanded ? (
+                          <ChevronUp className="w-6 h-6" style={{ color: 'var(--clay-text-secondary)' }} />
+                        ) : (
+                          <ChevronDown className="w-6 h-6" style={{ color: 'var(--clay-text-secondary)' }} />
+                        )}
+                      </button>
+
+                      {isDepartmentExpanded && (
+                        <div className="px-4 pb-4 space-y-4">
+                          {group.facultyList.map((f) => (
+                            <div
+                              key={f.id}
+                              className="rounded-2xl card transition-all duration-300 cursor-pointer"
+                              onClick={() => setExpandedFaculty(expandedFaculty === f.id ? null : f.id)}
+                              style={{
+                                background: f.status === "busy"
+                                  ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
+                                  : 'linear-gradient(135deg, rgba(168, 213, 186, 0.25) 0%, rgba(168, 213, 186, 0.1) 100%)',
+                                borderColor: expandedFaculty === f.id ? 'var(--clay-accent-warm)' : (f.status === 'busy' ? 'rgba(232, 180, 168, 0.4)' : 'rgba(168, 213, 186, 0.5)'),
+                                borderWidth: expandedFaculty === f.id ? '3px' : '2px',
+                                boxShadow: expandedFaculty === f.id
+                                  ? '0 12px 35px var(--clay-shadow-medium), inset 0 1px 0 rgba(255, 255, 255, 0.6)'
+                                  : '0 4px 20px var(--clay-shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.5)',
+                                transition: 'borderColor 0.3s, borderWidth 0.3s, boxShadow 0.3s'
+                              }}
+                            >
+                              <div className="p-4">
+                                <div className="flex items-start justify-between gap-3 mb-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
+                                    <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-3 py-1 rounded-full text-xs font-bold badge whitespace-nowrap ${
+                                      f.status === 'busy' ? 'badge-warning' : 'badge-success'
+                                    }`} style={{ color: 'white' }}>
+                                      {f.status.toUpperCase()}
+                                    </span>
+                                    {expandedFaculty === f.id ? (
+                                      <ChevronUp className="w-5 h-5" style={{ color: 'var(--clay-text-secondary)' }} />
+                                    ) : (
+                                      <ChevronDown className="w-5 h-5" style={{ color: 'var(--clay-text-secondary)' }} />
+                                    )}
+                                  </div>
+                                </div>
+
+                                {expandedFaculty === f.id && (
+                                  <div
+                                    className="mt-4 pt-4 border-t overflow-hidden transition-opacity duration-150"
+                                    style={{ borderColor: 'rgba(0,0,0,0.1)' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <WeeklySchedule
+                                      facultyId={f.id}
+                                      facultyName={f.name}
+                                      bookedSlots={bookedSlots}
+                                      selectedSlot={selectedFaculty === f.id && selectedTimePeriod && selectedDate ? { date: selectedDate, timeString: selectedTimePeriod } : null}
+                                      onSlotSelect={(slot, date, day) => {
+                                        setSelectedFaculty(f.id);
+                                        setSelectedTimePeriod(slot.timeString);
+                                        setSelectedDate(date);
+                                        setSelectedDay(day);
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
-                    </div>
-                  </motion.div>
-                );
+                    </motion.div>
+                  );
                 })
               )}
             </AnimatePresence>
