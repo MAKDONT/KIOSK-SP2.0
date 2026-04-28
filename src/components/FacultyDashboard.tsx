@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff } from "lucide-react";
+import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff, MessageCircle } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
 import { formatTime12HourPHTFns, formatInTimezonePHT, getDayNamePHT } from "../utils/timezoneUtils";
 
@@ -90,6 +90,13 @@ export default function FacultyDashboard() {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  const [showTelegramModal, setShowTelegramModal] = useState(false);
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramUsername, setTelegramUsername] = useState("");
+  const [telegramStatus, setTelegramStatus] = useState<{ registered: boolean; is_active: boolean; telegram_username?: string; registered_at?: string } | null>(null);
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramError, setTelegramError] = useState("");
+  const [telegramSuccess, setTelegramSuccess] = useState("");
   const [consultationAlert, setConsultationAlert] = useState<{
     consultation_id: number;
     student_name: string;
@@ -1070,6 +1077,106 @@ export default function FacultyDashboard() {
 
   const timeOptions = generateTimeOptions();
 
+  const openTelegramModal = async () => {
+    if (!selectedFaculty) return;
+    setTelegramChatId("");
+    setTelegramUsername("");
+    setTelegramError("");
+    setTelegramSuccess("");
+    setTelegramLoading(true);
+
+    try {
+      const response = await fetch(`/api/faculty/${selectedFaculty}/telegram/status`);
+      const data = await response.json();
+      setTelegramStatus(data);
+    } catch (err: any) {
+      setTelegramError("Failed to fetch Telegram status");
+    } finally {
+      setTelegramLoading(false);
+    }
+
+    setShowTelegramModal(true);
+  };
+
+  const handleTelegramRegister = async () => {
+    if (!selectedFaculty) return;
+    if (!telegramChatId.trim()) {
+      setTelegramError("Please enter your Telegram Chat ID");
+      return;
+    }
+
+    const chatId = parseInt(telegramChatId, 10);
+    if (isNaN(chatId)) {
+      setTelegramError("Chat ID must be a valid number");
+      return;
+    }
+
+    setTelegramLoading(true);
+    setTelegramError("");
+    setTelegramSuccess("");
+
+    try {
+      const response = await fetch(`/api/faculty/${selectedFaculty}/telegram/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_chat_id: chatId,
+          telegram_username: telegramUsername || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        setTelegramError(error.message || "Failed to register Telegram");
+        return;
+      }
+
+      setTelegramSuccess("✅ Telegram registered successfully! You'll receive consultation reminders.");
+      setTelegramChatId("");
+      setTelegramUsername("");
+      
+      // Refresh status
+      const statusResponse = await fetch(`/api/faculty/${selectedFaculty}/telegram/status`);
+      const statusData = await statusResponse.json();
+      setTelegramStatus(statusData);
+    } catch (err: any) {
+      setTelegramError("Network error. Please try again.");
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleTelegramDisconnect = async () => {
+    if (!selectedFaculty || !window.confirm("Are you sure you want to disable Telegram notifications?")) return;
+
+    setTelegramLoading(true);
+    setTelegramError("");
+    setTelegramSuccess("");
+
+    try {
+      const response = await fetch(`/api/faculty/${selectedFaculty}/telegram/disconnect`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        setTelegramError(error.message || "Failed to disconnect");
+        return;
+      }
+
+      setTelegramSuccess("Telegram notifications disabled");
+      
+      // Refresh status
+      const statusResponse = await fetch(`/api/faculty/${selectedFaculty}/telegram/status`);
+      const statusData = await statusResponse.json();
+      setTelegramStatus(statusData);
+    } catch (err: any) {
+      setTelegramError("Network error. Please try again.");
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-[100dvh] bg-neutral-100 flex flex-col">
       {/* Consultation Alert Modal */}
@@ -1135,6 +1242,12 @@ export default function FacultyDashboard() {
             className="flex items-center gap-2 px-4 py-2 text-white font-medium rounded-xl transition-colors flex-1 sm:flex-none justify-center" style={{ background: 'var(--clay-accent-lavender)' }}
           >
             <Clock className="w-4 h-4" /> Availability
+          </button>
+          <button
+            onClick={openTelegramModal}
+            className="flex items-center gap-2 px-4 py-2 text-white font-medium rounded-xl transition-colors flex-1 sm:flex-none justify-center" style={{ background: '#0088cc' }}
+          >
+            <MessageCircle className="w-4 h-4" /> Telegram
           </button>
           <span className="text-neutral-600 font-medium hidden sm:block">
             {selectedFacultyData ? selectedFacultyData.name : "Loading..."}
@@ -1620,6 +1733,114 @@ export default function FacultyDashboard() {
                 {passwordSaving ? "Updating..." : "Update Password"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showTelegramModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-4 text-blue-600 mb-6">
+              <div className="p-3 bg-blue-100 rounded-full">
+                <MessageCircle className="w-6 h-6" />
+              </div>
+              <h2 className="text-2xl font-bold text-neutral-900">Telegram Notifications</h2>
+            </div>
+
+            {telegramStatus?.registered && telegramStatus?.is_active ? (
+              <div>
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+                  <p className="text-blue-800 text-sm font-medium">
+                    ✅ <strong>Telegram is Active</strong>
+                    <br />
+                    {telegramStatus.telegram_username && (
+                      <>Username: @{telegramStatus.telegram_username}<br /></>
+                    )}
+                    Registered: {new Date(telegramStatus.registered_at || "").toLocaleDateString()}
+                  </p>
+                </div>
+                {telegramSuccess && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 text-green-700 text-sm">
+                    {telegramSuccess}
+                  </div>
+                )}
+                <button
+                  onClick={handleTelegramDisconnect}
+                  disabled={telegramLoading}
+                  className="w-full px-6 py-3 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white font-medium rounded-xl transition-colors"
+                >
+                  {telegramLoading ? "Processing..." : "Disable Telegram Notifications"}
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-4 text-sm text-neutral-600">
+                  <p className="font-semibold mb-2">How to get your Telegram Chat ID:</p>
+                  <ol className="list-decimal ml-4 space-y-1">
+                    <li>Search for @kiosk_queue_bot on Telegram</li>
+                    <li>Click "Start" or send /start</li>
+                    <li>Copy your Chat ID from the bot message</li>
+                    <li>Paste it below and click Register</li>
+                  </ol>
+                </div>
+
+                {telegramError && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-red-700 text-sm flex gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    {telegramError}
+                  </div>
+                )}
+
+                {telegramSuccess && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 text-green-700 text-sm">
+                    {telegramSuccess}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-neutral-700 mb-2">Telegram Chat ID</label>
+                    <input
+                      type="text"
+                      placeholder="Enter your Chat ID (e.g., 123456789)"
+                      value={telegramChatId}
+                      onChange={(e) => {
+                        setTelegramChatId(e.target.value);
+                        setTelegramError("");
+                      }}
+                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-neutral-700 mb-2">Username (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="Your Telegram username"
+                      value={telegramUsername}
+                      onChange={(e) => setTelegramUsername(e.target.value)}
+                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-4 mt-8">
+                  <button
+                    onClick={() => setShowTelegramModal(false)}
+                    className="flex-1 px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleTelegramRegister}
+                    disabled={telegramLoading}
+                    className="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-xl transition-colors shadow-lg shadow-blue-200"
+                  >
+                    {telegramLoading ? "Registering..." : "Register Telegram"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -69,18 +69,21 @@ The `node-telegram-bot-api` package will be installed with the dependencies.
 1. **Find the bot** - Search for your bot username in Telegram (e.g., @kiosk_queue_bot)
 2. **Get your Chat ID** - Send `/start` to the bot to get your Telegram chat ID
 3. **Register in the KIOSK app** - In the Faculty Dashboard:
-   - Go to Settings/Preferences
-   - Find "Telegram Notifications"
+   - Click the **"Telegram"** button in the header (next to "Availability")
+   - A Telegram settings modal will open
    - Enter your Chat ID
-   - Click "Register"
-4. **Confirm** - You should receive a welcome message from the bot
+   - Optionally enter your Telegram username
+   - Click "Register Telegram"
+4. **Confirm** - You should receive a welcome message from the bot and the status will show "✅ Telegram is Active"
 
 #### Manage Notifications
 
 In the Faculty Dashboard:
-- **Enable/Disable**: Toggle Telegram notifications on/off
-- **Disconnect**: Unregister from Telegram notifications anytime
-- **Check Status**: View your registration status and registration date
+- **Open Settings** - Click the **"Telegram"** button in the header
+- **View Status** - See if Telegram is registered and active
+- **Register** - If not registered, enter your Chat ID and click "Register Telegram"
+- **Disconnect** - If already registered, click "Disable Telegram Notifications" to stop receiving messages
+- **Check Status** - View your registration status, Telegram username, and registration date
 
 **When you'll receive notifications:**
 - 5-7 minutes before each consultation is scheduled to start
@@ -225,7 +228,7 @@ These notifications are sent automatically by the scheduler every 30 seconds whe
 **telegram_chats**
 ```sql
 - id: BIGINT (Primary Key)
-- faculty_id: TEXT (Foreign Key → faculty)
+- faculty_id: UUID (Foreign Key → faculty)
 - telegram_chat_id: BIGINT
 - telegram_username: TEXT (optional)
 - registered_at: TIMESTAMPTZ
@@ -236,8 +239,8 @@ These notifications are sent automatically by the scheduler every 30 seconds whe
 **telegram_notification_logs**
 ```sql
 - id: BIGINT (Primary Key)
-- faculty_id: TEXT (Foreign Key → faculty)
-- queue_id: BIGINT (Foreign Key → queue, optional)
+- faculty_id: UUID (Foreign Key → faculty)
+- queue_id: UUID (Foreign Key → queue, optional)
 - message_type: TEXT
 - message_text: TEXT
 - sent_at: TIMESTAMPTZ
