@@ -1740,13 +1740,17 @@ export default function FacultyDashboard() {
       {showTelegramModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <div className="flex items-center gap-4 text-blue-600 mb-6">
-              <div className="p-3 bg-blue-100 rounded-full">
-                <MessageCircle className="w-6 h-6" />
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-4 text-blue-600">
+                <div className="p-3 bg-blue-100 rounded-full">
+                  <MessageCircle className="w-6 h-6" />
+                </div>
+                <h2 className="text-2xl font-bold text-neutral-900">Telegram Notifications</h2>
               </div>
-              <h2 className="text-2xl font-bold text-neutral-900">Telegram Notifications</h2>
             </div>
 
+            {/* Active Status View */}
             {telegramStatus?.registered && telegramStatus?.is_active ? (
               <div>
                 <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
@@ -1760,46 +1764,58 @@ export default function FacultyDashboard() {
                   </p>
                 </div>
                 {telegramSuccess && (
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 text-green-700 text-sm">
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 text-green-700 text-sm font-medium">
                     {telegramSuccess}
                   </div>
                 )}
-                <button
-                  onClick={handleTelegramDisconnect}
-                  disabled={telegramLoading}
-                  className="w-full px-6 py-3 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white font-medium rounded-xl transition-colors"
-                >
-                  {telegramLoading ? "Processing..." : "Disable Telegram Notifications"}
-                </button>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowTelegramModal(false)}
+                    className="flex-1 px-6 py-3 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-medium rounded-xl transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={handleTelegramDisconnect}
+                    disabled={telegramLoading}
+                    className="flex-1 px-6 py-3 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white font-medium rounded-xl transition-colors"
+                  >
+                    {telegramLoading ? "Processing..." : "Disable"}
+                  </button>
+                </div>
               </div>
             ) : (
               <div>
-                <div className="mb-4 text-sm text-neutral-600">
-                  <p className="font-semibold mb-2">How to get your Telegram Chat ID:</p>
-                  <ol className="list-decimal ml-4 space-y-1">
-                    <li>Search for @kiosk_queue_bot on Telegram</li>
-                    <li>Click "Start" or send /start</li>
-                    <li>Copy your Chat ID from the bot message</li>
+                {/* Instructions */}
+                <div className="mb-5 text-sm text-neutral-600 bg-neutral-50 rounded-xl p-4">
+                  <p className="font-semibold mb-3 text-neutral-900">📱 How to get your Telegram Chat ID:</p>
+                  <ol className="list-decimal ml-4 space-y-2 text-neutral-700">
+                    <li>Search for <strong>@kiosk_queue_bot</strong> on Telegram</li>
+                    <li>Click "Start" or send <strong>/start</strong></li>
+                    <li>Copy your <strong>Chat ID</strong> from the bot message</li>
                     <li>Paste it below and click Register</li>
                   </ol>
                 </div>
 
+                {/* Error Message */}
                 {telegramError && (
-                  <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-red-700 text-sm flex gap-2">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    {telegramError}
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4 text-red-700 text-sm flex gap-2">
+                    <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <span>{telegramError}</span>
                   </div>
                 )}
 
+                {/* Success Message */}
                 {telegramSuccess && (
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 text-green-700 text-sm">
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 text-green-700 text-sm font-medium">
                     {telegramSuccess}
                   </div>
                 )}
 
-                <div className="space-y-3">
+                {/* Input Fields */}
+                <div className="space-y-4 mb-6">
                   <div>
-                    <label className="block text-sm font-semibold text-neutral-700 mb-2">Telegram Chat ID</label>
+                    <label className="block text-sm font-semibold text-neutral-700 mb-2">Telegram Chat ID *</label>
                     <input
                       type="text"
                       placeholder="Enter your Chat ID (e.g., 123456789)"
@@ -1808,7 +1824,8 @@ export default function FacultyDashboard() {
                         setTelegramChatId(e.target.value);
                         setTelegramError("");
                       }}
-                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      disabled={telegramLoading}
+                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
                     />
                   </div>
 
@@ -1816,27 +1833,36 @@ export default function FacultyDashboard() {
                     <label className="block text-sm font-semibold text-neutral-700 mb-2">Username (Optional)</label>
                     <input
                       type="text"
-                      placeholder="Your Telegram username"
+                      placeholder="Your Telegram username (without @)"
                       value={telegramUsername}
                       onChange={(e) => setTelegramUsername(e.target.value)}
-                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      disabled={telegramLoading}
+                      className="w-full px-4 py-3 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
                     />
                   </div>
                 </div>
 
-                <div className="flex gap-4 mt-8">
+                {/* Action Buttons */}
+                <div className="flex gap-3">
                   <button
-                    onClick={() => setShowTelegramModal(false)}
-                    className="flex-1 px-6 py-3 text-neutral-600 font-medium hover:bg-neutral-100 rounded-xl transition-colors"
+                    onClick={() => {
+                      setShowTelegramModal(false);
+                      setTelegramError("");
+                      setTelegramSuccess("");
+                      setTelegramChatId("");
+                      setTelegramUsername("");
+                    }}
+                    disabled={telegramLoading}
+                    className="flex-1 px-6 py-3 text-neutral-700 font-medium hover:bg-neutral-100 rounded-xl transition-colors disabled:opacity-50"
                   >
-                    Cancel
+                    Exit
                   </button>
                   <button
                     onClick={handleTelegramRegister}
-                    disabled={telegramLoading}
+                    disabled={telegramLoading || !telegramChatId.trim()}
                     className="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-xl transition-colors shadow-lg shadow-blue-200"
                   >
-                    {telegramLoading ? "Registering..." : "Register Telegram"}
+                    {telegramLoading ? "Registering..." : "Register"}
                   </button>
                 </div>
               </div>
