@@ -437,6 +437,21 @@ export default function Login() {
   };
 
   const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
+  const departmentGroups = Object.entries(
+    availableFaculty.reduce<Record<string, Faculty[]>>((acc, item) => {
+      const departmentName = item.department || "Unassigned Department";
+      if (!acc[departmentName]) {
+        acc[departmentName] = [];
+      }
+      acc[departmentName].push(item);
+      return acc;
+    }, {})
+  )
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([department, facultyList]) => ({
+      department,
+      facultyList: facultyList.sort((left, right) => left.name.localeCompare(right.name))
+    }));
   const servingStudents = liveQueue.filter((item) => item.status === "serving");
   const waitingStudents = liveQueue.filter((item) => item.status === "waiting");
   const activeStudents = [...servingStudents, ...waitingStudents];
@@ -675,24 +690,33 @@ export default function Login() {
               <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-warning" style={{ color: 'white' }}>
                 FACULTY ({availableFaculty.length} Available)
               </h3>
-              <div className="space-y-3">
-                {availableFaculty.map(f => (
-                  <div key={f.id} className="p-4 rounded-2xl card" style={{
-                    background: f.status === "busy"
-                      ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
-                      : 'linear-gradient(135deg, rgba(168, 213, 186, 0.15) 0%, rgba(168, 213, 186, 0.05) 100%)',
-                    borderColor: f.status === "busy" ? 'rgba(232, 180, 168, 0.3)' : 'rgba(168, 213, 186, 0.3)'
-                  }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
-                        <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
-                      </div>
-                      <span className={`px-3 py-1 rounded-full text-sm font-bold badge ${
-                        f.status === 'busy' ? 'badge-warning' : 'badge-success'
-                      }`} style={{ color: 'white' }}>
-                        {f.status.toUpperCase()}
-                      </span>
+              <div className="space-y-4">
+                {departmentGroups.map((group) => (
+                  <div key={group.department} className="space-y-3">
+                    <h4 className="text-lg font-bold px-4 py-2 rounded-xl badge badge-info" style={{ color: 'white' }}>
+                      {group.department}
+                    </h4>
+                    <div className="space-y-3">
+                      {group.facultyList.map((f) => (
+                        <div key={f.id} className="p-4 rounded-2xl card" style={{
+                          background: f.status === "busy"
+                            ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
+                            : 'linear-gradient(135deg, rgba(168, 213, 186, 0.15) 0%, rgba(168, 213, 186, 0.05) 100%)',
+                          borderColor: f.status === "busy" ? 'rgba(232, 180, 168, 0.3)' : 'rgba(168, 213, 186, 0.3)'
+                        }}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
+                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
+                            </div>
+                            <span className={`px-3 py-1 rounded-full text-sm font-bold badge ${
+                              f.status === 'busy' ? 'badge-warning' : 'badge-success'
+                            }`} style={{ color: 'white' }}>
+                              {f.status.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
