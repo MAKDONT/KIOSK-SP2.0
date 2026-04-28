@@ -848,17 +848,6 @@ async function sendEmailNotification(to: string, subject: string, html: string) 
   }
 }
 
-      sendCompletedAtIso,
-      statusCode,
-      durationMs: elapsedMs,
-      lastError: error?.message || "Unknown email send error"
-    });
-    console.error(
-      `[Email] Sending failed | trackingId=${trackingId} | to=${to} | status=${statusCode} | durationMs=${elapsedMs} | error=${error.message}`
-    );
-  }
-}
-
 // ===== TELEGRAM NOTIFICATION FUNCTIONS =====
 
 /**
