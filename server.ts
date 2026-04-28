@@ -6,6 +6,7 @@ import http from "http";
 import crypto from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import sgMail from "@sendgrid/mail";
+import TelegramBot from "node-telegram-bot-api";
 import { google } from "googleapis";
 import multer from "multer";
 import fs from "fs";
@@ -562,6 +563,7 @@ function deleteFacultyGoogleAuthData(facultyId: string) {
 }
 
 let supabaseClient: SupabaseClient | null = null;
+let telegramBot: TelegramBot | null = null;
 
 // Setup SendGrid
 async function setupSendGrid() {
@@ -578,25 +580,404 @@ async function setupSendGrid() {
 }
 setupSendGrid();
 
+// Setup Telegram Bot
+async function setupTelegramBot() {
+  const telegramToken = unwrapEnvValue(process.env.TELEGRAM_BOT_TOKEN);
+  if (telegramToken) {
+    try {
+      telegramBot = new TelegramBot(telegramToken, { polling: false });
+      console.log("✅ Telegram Bot Service Initialized Successfully");
+    } catch (error: any) {
+      console.error("❌ Failed to initialize Telegram Bot:", error.message);
+    }
+  } else {
+    console.warn("⚠️ TELEGRAM_BOT_TOKEN not set. Telegram notifications will be disabled.");
+  }
+}
+setupTelegramBot();
+
+const SENDGRID_EVENT_SIGNATURE_HEADER = "x-twilio-email-event-webhook-signature";
+const SENDGRID_EVENT_TIMESTAMP_HEADER = "x-twilio-email-event-webhook-timestamp";
+
+const getSendGridEventWebhookPublicKey = () => {
+  const value = unwrapEnvValue(process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY);
+  return value ? value.replace(/\\n/g, "\n") : "";
+};
+
+const normalizeSendGridMessageId = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withoutBrackets = trimmed.replace(/^<|>$/g, "");
+  const [primary] = withoutBrackets.split(".");
+  return primary || withoutBrackets;
+};
+
+function verifySendGridEventWebhookSignature(rawBody: string, timestamp: string, signature: string): boolean {
+  const publicKey = getSendGridEventWebhookPublicKey();
+  if (!publicKey) {
+    return true;
+  }
+
+  try {
+    const verifier = crypto.createVerify("SHA256");
+    verifier.update(`${timestamp}${rawBody}`);
+    verifier.end();
+    return verifier.verify(publicKey, signature, "base64");
+  } catch (err) {
+    console.error("[EmailWebhook] Signature verification error:", err);
+    return false;
+  }
+}
+
+const logEmailDeliveryRecordStart = async (payload: {
+  trackingId: string;
+  to: string;
+  subject: string;
+  sendStartedAtIso: string;
+}) => {
+  try {
+    await getSupabase().from("email_delivery_logs").insert({
+      tracking_id: payload.trackingId,
+      recipient_email: payload.to,
+      subject: payload.subject,
+      send_started_at: payload.sendStartedAtIso,
+      created_at: payload.sendStartedAtIso,
+      updated_at: payload.sendStartedAtIso,
+      last_event: "sending_started"
+    });
+  } catch (err: any) {
+    console.error("[Email] Failed to log send start:", err?.message || err);
+  }
+};
+
+const logEmailDeliveryRecordFinish = async (payload: {
+  trackingId: string;
+  sendCompletedAtIso: string;
+  messageId?: string | null;
+  statusCode?: number | string;
+  durationMs: number;
+  lastError?: string | null;
+}) => {
+  try {
+    await getSupabase()
+      .from("email_delivery_logs")
+      .update({
+        message_id: payload.messageId || null,
+        send_completed_at: payload.sendCompletedAtIso,
+        send_duration_ms: payload.durationMs,
+        send_status_code: payload.statusCode ? String(payload.statusCode) : null,
+        last_error: payload.lastError || null,
+        last_event: payload.lastError ? "sending_failed" : "sending_finished",
+        updated_at: payload.sendCompletedAtIso
+      })
+      .eq("tracking_id", payload.trackingId);
+  } catch (err: any) {
+    console.error("[Email] Failed to log send finish:", err?.message || err);
+  }
+};
+
+const persistSendGridWebhookEvent = async (event: any) => {
+  const nowIso = new Date().toISOString();
+  const eventType = typeof event?.event === "string" ? event.event : "unknown";
+  const eventTimestampIso = Number.isFinite(Number(event?.timestamp))
+    ? new Date(Number(event.timestamp) * 1000).toISOString()
+    : null;
+  const trackingId = event?.custom_args?.tracking_id || event?.unique_args?.tracking_id || null;
+  const messageIdRaw = event?.sg_message_id || event?.["smtp-id"] || event?.smtp_id || null;
+  const messageId = normalizeSendGridMessageId(messageIdRaw);
+  const recipientEmail = typeof event?.email === "string" ? event.email : null;
+
+  try {
+    await getSupabase().from("email_delivery_events").insert({
+      tracking_id: trackingId,
+      message_id: messageId,
+      recipient_email: recipientEmail,
+      event_type: eventType,
+      event_timestamp: eventTimestampIso,
+      sendgrid_event_id: event?.sg_event_id || null,
+      reason: event?.reason || null,
+      status: event?.status || null,
+      response: event?.response || null,
+      raw_payload: event,
+      created_at: nowIso
+    });
+  } catch (err: any) {
+    console.error("[EmailWebhook] Failed to persist webhook event:", err?.message || err);
+  }
+
+  if (!trackingId && !messageId) {
+    return;
+  }
+
+  const updatePayload: Record<string, any> = {
+    last_event: eventType,
+    updated_at: nowIso,
+    recipient_email: recipientEmail,
+    message_id: messageId
+  };
+
+  switch (eventType) {
+    case "processed":
+      updatePayload.processed_at = eventTimestampIso;
+      break;
+    case "delivered":
+      updatePayload.delivered_at = eventTimestampIso;
+      break;
+    case "deferred":
+      updatePayload.deferred_at = eventTimestampIso;
+      updatePayload.last_error = event?.reason || event?.response || "Email delivery deferred";
+      break;
+    case "bounce":
+      updatePayload.bounced_at = eventTimestampIso;
+      updatePayload.last_error = event?.reason || event?.response || "Email bounced";
+      break;
+    case "dropped":
+      updatePayload.dropped_at = eventTimestampIso;
+      updatePayload.last_error = event?.reason || event?.response || "Email dropped";
+      break;
+    case "open":
+      updatePayload.opened_at = eventTimestampIso;
+      break;
+    case "click":
+      updatePayload.clicked_at = eventTimestampIso;
+      break;
+    default:
+      break;
+  }
+
+  try {
+    let query = getSupabase().from("email_delivery_logs").update(updatePayload);
+
+    if (trackingId) {
+      query = query.eq("tracking_id", trackingId);
+    } else if (messageId) {
+      query = query.eq("message_id", messageId);
+    }
+
+    const { data: updatedRows, error: updateErr } = await query.select("tracking_id, send_completed_at");
+    if (updateErr) {
+      throw updateErr;
+    }
+
+    const updated = Array.isArray(updatedRows) ? updatedRows : [];
+    if (eventType === "delivered" && eventTimestampIso && updated.length > 0) {
+      for (const row of updated) {
+        if (!row?.send_completed_at) continue;
+        const receiveDurationMs = Math.max(
+          0,
+          new Date(eventTimestampIso).getTime() - new Date(row.send_completed_at).getTime()
+        );
+        await getSupabase()
+          .from("email_delivery_logs")
+          .update({
+            receive_duration_ms: receiveDurationMs,
+            updated_at: nowIso
+          })
+          .eq("tracking_id", row.tracking_id);
+      }
+    }
+  } catch (err: any) {
+    console.error("[EmailWebhook] Failed to update delivery log:", err?.message || err);
+  }
+};
+
 async function sendEmailNotification(to: string, subject: string, html: string) {
   if (!process.env.SENDGRID_API_KEY) {
     console.log("SendGrid not configured. Email skipped.");
     return;
   }
   
+  const trackingId = crypto.randomUUID();
+  const startedAt = Date.now();
+  const sendStartedAtIso = new Date(startedAt).toISOString();
+  console.log(`[Email] Sending started | trackingId=${trackingId} | to=${to} | subject=${subject}`);
+  await logEmailDeliveryRecordStart({
+    trackingId,
+    to,
+    subject,
+    sendStartedAtIso
+  });
+
   try {
     const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@consultation-system.com";
-    const msg = {
+    const msg: any = {
       to,
       from: fromEmail,
       subject,
       html,
+      custom_args: {
+        tracking_id: trackingId
+      }
     };
     
-    await sgMail.send(msg);
-    console.log(`[Email] Sent to ${to}`);
+    const [response] = await sgMail.send(msg);
+    const elapsedMs = Date.now() - startedAt;
+    const sendCompletedAtIso = new Date().toISOString();
+    const messageIdHeader = response?.headers?.["x-message-id"];
+    const rawMessageId = Array.isArray(messageIdHeader)
+      ? messageIdHeader[0]
+      : messageIdHeader || "n/a";
+    const messageId = normalizeSendGridMessageId(rawMessageId) || rawMessageId;
+
+    await logEmailDeliveryRecordFinish({
+      trackingId,
+      sendCompletedAtIso,
+      messageId,
+      statusCode: response?.statusCode,
+      durationMs: elapsedMs
+    });
+
+    console.log(
+      `[Email] Sending finished | trackingId=${trackingId} | to=${to} | status=${response?.statusCode ?? "n/a"} | messageId=${messageId} | durationMs=${elapsedMs}`
+    );
   } catch (error: any) {
-    console.error("Failed to send email:", error.message);
+    const elapsedMs = Date.now() - startedAt;
+    const sendCompletedAtIso = new Date().toISOString();
+    const statusCode = error?.code || error?.response?.statusCode || "n/a";
+    await logEmailDeliveryRecordFinish({
+      trackingId,
+      sendCompletedAtIso,
+      statusCode,
+      durationMs: elapsedMs,
+      lastError: error?.message || "Unknown email send error"
+    });
+    console.error(
+      `[Email] Sending failed | trackingId=${trackingId} | to=${to} | status=${statusCode} | durationMs=${elapsedMs} | error=${error.message}`
+    );
+  }
+}
+
+      sendCompletedAtIso,
+      statusCode,
+      durationMs: elapsedMs,
+      lastError: error?.message || "Unknown email send error"
+    });
+    console.error(
+      `[Email] Sending failed | trackingId=${trackingId} | to=${to} | status=${statusCode} | durationMs=${elapsedMs} | error=${error.message}`
+    );
+  }
+}
+
+// ===== TELEGRAM NOTIFICATION FUNCTIONS =====
+
+/**
+ * Send a Telegram message to a faculty member via their registered chat ID
+ */
+async function sendTelegramNotification(facultyId: string, message: string) {
+  if (!telegramBot) {
+    console.log("[Telegram] Bot not initialized. Message skipped.");
+    return;
+  }
+
+  try {
+    // Get faculty's Telegram chat ID from database
+    const { data: telegramChat, error: fetchError } = await getSupabase()
+      .from("telegram_chats")
+      .select("telegram_chat_id")
+      .eq("faculty_id", facultyId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error("[Telegram] Error fetching chat:", fetchError.message);
+      return;
+    }
+
+    if (!telegramChat) {
+      console.log(`[Telegram] No active Telegram registration for faculty ${facultyId}`);
+      return;
+    }
+
+    const trackingId = crypto.randomUUID();
+    const startedAt = Date.now();
+    console.log(`[Telegram] Sending started | trackingId=${trackingId} | faculty=${facultyId} | chatId=${telegramChat.telegram_chat_id}`);
+
+    const sentMessage = await telegramBot.sendMessage(telegramChat.telegram_chat_id, message, {
+      parse_mode: "HTML"
+    });
+
+    const elapsedMs = Date.now() - startedAt;
+    console.log(
+      `[Telegram] Message sent successfully | trackingId=${trackingId} | messageId=${sentMessage.message_id} | durationMs=${elapsedMs}`
+    );
+
+    // Log the notification
+    await logTelegramNotification(facultyId, null, "status_update", message, sentMessage.message_id, "sent");
+  } catch (error: any) {
+    console.error(
+      `[Telegram] Failed to send message to faculty ${facultyId} | error=${error.message}`
+    );
+    await logTelegramNotification(facultyId, null, "status_update", message, null, "failed", error.message);
+  }
+}
+
+/**
+ * Send queue status update notification to faculty
+ */
+async function sendQueueStatusNotification(
+  facultyId: string,
+  queueId: number,
+  status: string,
+  studentName: string,
+  queueNumber?: string
+) {
+  if (!telegramBot) {
+    console.log("[Telegram] Bot not initialized. Queue notification skipped.");
+    return;
+  }
+
+  const statusMessages: Record<string, string> = {
+    waiting: "is waiting in queue",
+    next: "is up next",
+    serving: "your consultation is starting now",
+    completed: "consultation has been completed",
+    cancelled: "consultation has been cancelled"
+  };
+
+  const statusEmoji: Record<string, string> = {
+    waiting: "⏳",
+    next: "👉",
+    serving: "🔴",
+    completed: "✅",
+    cancelled: "❌"
+  };
+
+  const message = `${statusEmoji[status] || "📢"} <b>Queue Update</b>\n\n` +
+    `<b>Student:</b> ${studentName}\n` +
+    `<b>Status:</b> ${statusMessages[status] || status}\n` +
+    `${queueNumber ? `<b>Queue #:</b> ${queueNumber}\n` : ''}` +
+    `<b>Time:</b> ${new Date().toLocaleTimeString()}`;
+
+  await sendTelegramNotification(facultyId, message);
+}
+
+/**
+ * Log Telegram notification to database
+ */
+async function logTelegramNotification(
+  facultyId: string,
+  queueId: number | null,
+  messageType: string,
+  messageText: string,
+  telegramMessageId: number | null,
+  status: string,
+  errorMessage?: string
+) {
+  try {
+    await getSupabase()
+      .from("telegram_notification_logs")
+      .insert({
+        faculty_id: facultyId,
+        queue_id: queueId,
+        message_type: messageType,
+        message_text: messageText,
+        telegram_message_id: telegramMessageId,
+        status: status,
+        error_message: errorMessage || null
+      });
+  } catch (error: any) {
+    console.error("[Telegram] Failed to log notification:", error.message);
   }
 }
 
@@ -640,7 +1021,12 @@ async function startServer() {
     });
   });
 
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({
+    limit: "1mb",
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf.toString("utf8");
+    }
+  }));
   app.use(cookieParser());
   app.set("trust proxy", 1);
 
@@ -4424,6 +4810,142 @@ async function startServer() {
     }
   });
 
+  // ===== TELEGRAM INTEGRATION ENDPOINTS =====
+  
+  /**
+   * Register Telegram chat for faculty notifications
+   * POST /api/faculty/:id/telegram/register
+   * Body: { telegram_chat_id: number, telegram_username?: string }
+   */
+  app.post("/api/faculty/:id/telegram/register", async (req, res) => {
+    try {
+      const facultyId = getBodyString(req.params.id);
+      const { telegram_chat_id, telegram_username } = req.body;
+
+      if (!facultyId) {
+        return res.status(400).json({ error: "Faculty ID is required." });
+      }
+
+      if (!telegram_chat_id || typeof telegram_chat_id !== "number") {
+        return res.status(400).json({ error: "Valid Telegram chat ID is required." });
+      }
+
+      // Check if faculty exists
+      const { data: faculty, error: facultyError } = await getSupabase()
+        .from("faculty")
+        .select("id")
+        .eq("id", facultyId)
+        .maybeSingle();
+
+      if (facultyError || !faculty) {
+        return res.status(404).json({ error: "Faculty not found." });
+      }
+
+      // Upsert Telegram chat registration
+      const { error: upsertError } = await getSupabase()
+        .from("telegram_chats")
+        .upsert({
+          faculty_id: facultyId,
+          telegram_chat_id,
+          telegram_username: telegram_username || null,
+          is_active: true,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: "faculty_id"
+        });
+
+      if (upsertError) {
+        console.error("[Telegram] Registration error:", upsertError.message);
+        return res.status(500).json({ error: "Failed to register Telegram chat." });
+      }
+
+      console.log(`✅ [Telegram] Faculty ${facultyId} registered with chat ${telegram_chat_id}`);
+
+      // Send a welcome message
+      await sendTelegramNotification(
+        facultyId,
+        "🎉 <b>Welcome to Queue Notifications!</b>\n\n" +
+        "You will now receive real-time updates about your student queue via Telegram.\n\n" +
+        "<b>Updates you'll receive:</b>\n" +
+        "📊 Queue status changes\n" +
+        "👥 Student arrivals\n" +
+        "⏰ Consultation reminders\n\n" +
+        "If you have any issues, please contact the admin."
+      );
+
+      res.json({ success: true, message: "Telegram chat registered successfully." });
+    } catch (err: any) {
+      console.error("[Telegram] Registration endpoint error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  /**
+   * Unregister Telegram chat for faculty
+   * POST /api/faculty/:id/telegram/disconnect
+   */
+  app.post("/api/faculty/:id/telegram/disconnect", async (req, res) => {
+    try {
+      const facultyId = getBodyString(req.params.id);
+
+      if (!facultyId) {
+        return res.status(400).json({ error: "Faculty ID is required." });
+      }
+
+      // Deactivate Telegram chat
+      const { error: updateError } = await getSupabase()
+        .from("telegram_chats")
+        .update({ is_active: false })
+        .eq("faculty_id", facultyId);
+
+      if (updateError) {
+        console.error("[Telegram] Disconnect error:", updateError.message);
+        return res.status(500).json({ error: "Failed to disconnect Telegram." });
+      }
+
+      console.log(`✅ [Telegram] Faculty ${facultyId} disconnected from Telegram notifications`);
+      res.json({ success: true, message: "Telegram notifications disabled." });
+    } catch (err: any) {
+      console.error("[Telegram] Disconnect endpoint error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  /**
+   * Get Telegram registration status
+   * GET /api/faculty/:id/telegram/status
+   */
+  app.get("/api/faculty/:id/telegram/status", async (req, res) => {
+    try {
+      const facultyId = getBodyString(req.params.id);
+
+      if (!facultyId) {
+        return res.status(400).json({ error: "Faculty ID is required." });
+      }
+
+      const { data: telegramChat, error } = await getSupabase()
+        .from("telegram_chats")
+        .select("telegram_chat_id, telegram_username, is_active, registered_at")
+        .eq("faculty_id", facultyId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("[Telegram] Status check error:", error.message);
+        return res.status(500).json({ error: "Failed to check status." });
+      }
+
+      res.json({
+        registered: !!telegramChat,
+        is_active: telegramChat?.is_active || false,
+        telegram_username: telegramChat?.telegram_username || null,
+        registered_at: telegramChat?.registered_at || null
+      });
+    } catch (err: any) {
+      console.error("[Telegram] Status endpoint error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.get("/api/auth/google/url", (req, res) => {
     try {
       if (hasServiceAccountAuth() && hasMeetServiceAccountAuth()) {
@@ -5566,6 +6088,41 @@ async function startServer() {
     }
   });
 
+  app.post("/api/webhooks/sendgrid-events", async (req, res) => {
+    try {
+      const signature = String(req.header(SENDGRID_EVENT_SIGNATURE_HEADER) || "").trim();
+      const timestamp = String(req.header(SENDGRID_EVENT_TIMESTAMP_HEADER) || "").trim();
+      const rawBody = String((req as any).rawBody || "");
+      const hasVerificationKey = Boolean(getSendGridEventWebhookPublicKey());
+
+      if (hasVerificationKey) {
+        if (!signature || !timestamp || !rawBody) {
+          return res.status(400).json({ error: "Missing SendGrid signature headers or raw body" });
+        }
+
+        const valid = verifySendGridEventWebhookSignature(rawBody, timestamp, signature);
+        if (!valid) {
+          return res.status(401).json({ error: "Invalid SendGrid webhook signature" });
+        }
+      }
+
+      const events = Array.isArray(req.body) ? req.body : [];
+      if (events.length === 0) {
+        return res.status(200).json({ ok: true, processed: 0 });
+      }
+
+      for (const event of events) {
+        await persistSendGridWebhookEvent(event);
+      }
+
+      console.log(`[EmailWebhook] Processed ${events.length} SendGrid event(s)`);
+      res.status(200).json({ ok: true, processed: events.length });
+    } catch (err: any) {
+      console.error("[EmailWebhook] Unhandled error:", err?.message || err);
+      res.status(500).json({ error: "Failed to process SendGrid events" });
+    }
+  });
+
   app.use("/api", (_req, res) => {
     res.status(404).json({
       error: "API route not found. If you recently changed backend routes, restart the server or redeploy the app.",
@@ -6165,8 +6722,20 @@ async function startServer() {
                   <p>Best regards,<br/>Consultation System</p>
                   `
                 );
+                
+                // Send Telegram notification to faculty - consultation starting soon
+                console.log(`   📱 Sending Telegram notification to faculty ${facultyId}: consultation in 5 minutes`);
+                await sendTelegramNotification(
+                  facultyId,
+                  `⏳ <b>CONSULTATION IN 5 MINUTES</b>\n\n` +
+                  `<b>Student:</b> ${studentName}\n` +
+                  `<b>Scheduled Time:</b> ${timePart}\n\n` +
+                  `Please prepare to log in soon.`
+                );
+                console.log(`   ✅ Telegram notification sent to faculty`);
+                
                 sentAdvanceEmails.add(consultation.id);
-                console.log(`   ✅ Advance email sent (via SendGrid)`);
+                console.log(`   ✅ Advance email & Telegram notification sent (via SendGrid & Telegram)`);
 
                 // Log audit event for advance email
                 await logAudit("consultation_advance_reminder_email_sent", {
@@ -6203,6 +6772,18 @@ async function startServer() {
                 );
                 console.log(`   ✅ On-time email sent (via SendGrid)`);
 
+                // Send Telegram notification to faculty - consultation is starting now
+                console.log(`   📱 Sending Telegram notification to faculty ${facultyId}: consultation STARTING NOW`);
+                await sendTelegramNotification(
+                  facultyId,
+                  `🔴 <b>CONSULTATION STARTING NOW!</b>\n\n` +
+                  `<b>Student:</b> ${studentName}\n` +
+                  `<b>Time:</b> ${timePart}\n` +
+                  `<b>Status:</b> Ready to start\n\n` +
+                  `Please log in to the system now to begin the consultation.`
+                );
+                console.log(`   ✅ Telegram notification sent to faculty`);
+
                 // Broadcast notification to faculty for this consultation (FACULTY ONLY GETS THIS)
                 console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation STARTING NOW`);
                 broadcast("consultation_starting_soon", {
@@ -6216,7 +6797,7 @@ async function startServer() {
                 });
 
                 sentOnTimeNotifications.add(consultation.id);
-                console.log(`   ✅ On-time email & faculty broadcast sent`);
+                console.log(`   ✅ On-time email, Telegram & faculty broadcast sent`);
 
                 // Log audit event for on-time notification
                 await logAudit("consultation_reminder_email_sent", {

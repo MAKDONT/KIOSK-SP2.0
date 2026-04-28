@@ -71,6 +71,29 @@ git push origin main
 - Wait until next day (resets at UTC midnight)
 - Or create paid account for higher limits
 
+## Event Webhook (Receive Time Logging)
+
+To log actual delivery/receive timing, configure SendGrid Event Webhook.
+
+1. Run SQL setup in Supabase using `setup-email-delivery-logs.sql`.
+2. In SendGrid, go to `Settings -> Mail Settings -> Event Webhook`.
+3. Set webhook URL:
+
+```text
+https://<your-domain>/api/webhooks/sendgrid-events
+```
+
+4. Enable events: `processed`, `delivered`, `deferred`, `bounce`, `dropped`, `open`, `click`.
+5. Recommended: enable Signed Event Webhook and add env var:
+
+```env
+SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+```
+
+Webhook events are saved to:
+- `email_delivery_logs`
+- `email_delivery_events`
+
 ## Next Steps
 
 Deploy to Render/Railway and emails will work!

@@ -38,6 +38,7 @@
     "motion": "^12.23.24",
     "multer": "^2.1.1",
     "node-schedule": "^2.1.1",
+    "node-telegram-bot-api": "^0.63.0",
     "nodemailer": "^8.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
