@@ -585,8 +585,33 @@ async function setupTelegramBot() {
   const telegramToken = unwrapEnvValue(process.env.TELEGRAM_BOT_TOKEN);
   if (telegramToken) {
     try {
-      telegramBot = new TelegramBot(telegramToken, { polling: false });
+      telegramBot = new TelegramBot(telegramToken, { polling: true });
       console.log("✅ Telegram Bot Service Initialized Successfully");
+
+      // Handle /start command
+      telegramBot.onText(/\/start/, (msg) => {
+        const chatId = msg.chat.id;
+        const firstName = msg.from?.first_name || "User";
+
+        const welcomeMessage = `👋 Welcome to KIOSK Queue Management!\n\n📋 Your Chat ID: \`${chatId}\`\n\nYou will receive consultation reminders here. Please keep this chat open to receive notifications.`;
+
+        telegramBot!.sendMessage(chatId, welcomeMessage, {
+          parse_mode: "Markdown",
+        });
+
+        console.log(`[Telegram] /start command from ${firstName} (ID: ${chatId})`);
+      });
+
+      // Handle any text message
+      telegramBot.on("message", (msg) => {
+        const chatId = msg.chat.id;
+        if (msg.text && !msg.text.startsWith("/")) {
+          telegramBot!.sendMessage(
+            chatId,
+            "Hello! I'm the KIOSK Queue Bot. I'll send you consultation reminders.\n\nUse /start to get your Chat ID."
+          );
+        }
+      });
     } catch (error: any) {
       console.error("❌ Failed to initialize Telegram Bot:", error.message);
     }
