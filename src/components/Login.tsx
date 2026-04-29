@@ -64,6 +64,7 @@ export default function Login() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [liveQueue, setLiveQueue] = useState<LiveQueueItem[]>([]);
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
 
   useEffect(() => {
     fetchFaculty();
@@ -687,39 +688,95 @@ export default function Login() {
 
             {/* Faculty Status - Always show when faculty available */}
             <div>
-              <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-warning" style={{ color: 'white' }}>
+              <h3 className="text-xl font-bold mb-4 px-4 py-2 rounded-lg badge badge-warning" style={{ color: 'white' }}>
                 FACULTY ({availableFaculty.length} Available)
               </h3>
-              <div className="space-y-4">
-                {departmentGroups.map((group) => (
-                  <div key={group.department} className="space-y-3">
-                    <h4 className="text-lg font-bold px-4 py-2 rounded-xl badge badge-info" style={{ color: 'white' }}>
+              
+              {/* Department Filter Dropdown */}
+              <div className="mb-6">
+                <select
+                  value={selectedDepartment || ""}
+                  onChange={(e) => setSelectedDepartment(e.target.value || null)}
+                  className="w-full p-4 rounded-2xl font-bold text-lg appearance-none transition-all"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--clay-bg-secondary) 0%, var(--clay-bg-tertiary) 100%)',
+                    color: 'var(--clay-text-primary)',
+                    border: '2px solid var(--clay-accent-warm)',
+                    cursor: 'pointer',
+                    backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e")`,
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 1rem center',
+                    backgroundSize: '1.5em 1.5em',
+                    paddingRight: '2.5rem'
+                  }}
+                >
+                  <option value="">ALL DEPARTMENTS</option>
+                  {departmentGroups.map((group) => (
+                    <option key={group.department} value={group.department}>
                       {group.department}
-                    </h4>
-                    <div className="space-y-3">
-                      {group.facultyList.map((f) => (
-                        <div key={f.id} className="p-4 rounded-2xl card" style={{
-                          background: f.status === "busy"
-                            ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
-                            : 'linear-gradient(135deg, rgba(168, 213, 186, 0.15) 0%, rgba(168, 213, 186, 0.05) 100%)',
-                          borderColor: f.status === "busy" ? 'rgba(232, 180, 168, 0.3)' : 'rgba(168, 213, 186, 0.3)'
-                        }}>
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
-                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Faculty List - Grouped by department when showing all, flat when filtered */}
+              <div className="space-y-3">
+                {selectedDepartment === null ? (
+                  // Show grouped by department
+                  departmentGroups.map((group) => (
+                    <div key={group.department}>
+                      <p className="text-sm font-bold px-4 py-2 uppercase" style={{ color: 'var(--clay-accent-warm)' }}>
+                        {group.department}
+                      </p>
+                      <div className="space-y-2 ml-2">
+                        {group.facultyList.map((f) => (
+                          <div key={f.id} className="p-4 rounded-2xl card" style={{
+                            background: f.status === "busy"
+                              ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
+                              : 'linear-gradient(135deg, rgba(168, 213, 186, 0.15) 0%, rgba(168, 213, 186, 0.05) 100%)',
+                            borderColor: f.status === "busy" ? 'rgba(232, 180, 168, 0.3)' : 'rgba(168, 213, 186, 0.3)'
+                          }}>
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
+                                <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
+                              </div>
+                              <span className={`px-3 py-1 rounded-full text-sm font-bold badge ${
+                                f.status === 'busy' ? 'badge-warning' : 'badge-success'
+                              }`} style={{ color: 'white' }}>
+                                {f.status.toUpperCase()}
+                              </span>
                             </div>
-                            <span className={`px-3 py-1 rounded-full text-sm font-bold badge ${
-                              f.status === 'busy' ? 'badge-warning' : 'badge-success'
-                            }`} style={{ color: 'white' }}>
-                              {f.status.toUpperCase()}
-                            </span>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  // Show flat list for selected department
+                  availableFaculty
+                    .filter(f => f.department === selectedDepartment)
+                    .map((f) => (
+                      <div key={f.id} className="p-4 rounded-2xl card" style={{
+                        background: f.status === "busy"
+                          ? 'linear-gradient(135deg, rgba(232, 180, 168, 0.15) 0%, rgba(232, 180, 168, 0.05) 100%)'
+                          : 'linear-gradient(135deg, rgba(168, 213, 186, 0.15) 0%, rgba(168, 213, 186, 0.05) 100%)',
+                        borderColor: f.status === "busy" ? 'rgba(232, 180, 168, 0.3)' : 'rgba(168, 213, 186, 0.3)'
+                      }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{f.name}</p>
+                            <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>{f.department}</p>
+                          </div>
+                          <span className={`px-3 py-1 rounded-full text-sm font-bold badge ${
+                            f.status === 'busy' ? 'badge-warning' : 'badge-success'
+                          }`} style={{ color: 'white' }}>
+                            {f.status.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                )}
               </div>
             </div>
           </div>
