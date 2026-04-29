@@ -64,7 +64,8 @@ export default function Login() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [liveQueue, setLiveQueue] = useState<LiveQueueItem[]>([]);
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
-  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
+  const [selectedStudentDepartment, setSelectedStudentDepartment] = useState<string | null>(null);
+  const [selectedFacultyDepartment, setSelectedFacultyDepartment] = useState<string | null>(null);
 
   useEffect(() => {
     fetchFaculty();
@@ -453,9 +454,35 @@ export default function Login() {
       department,
       facultyList: facultyList.sort((left, right) => left.name.localeCompare(right.name))
     }));
+  const getQueueItemDepartment = (item: LiveQueueItem): string => {
+    const facultyMember = faculty.find((f) => f.id === item.faculty_id);
+    return facultyMember?.department || "Unassigned Department";
+  };
+
   const servingStudents = liveQueue.filter((item) => item.status === "serving");
   const waitingStudents = liveQueue.filter((item) => item.status === "waiting");
   const activeStudents = [...servingStudents, ...waitingStudents];
+
+  const filteredServingStudents = selectedStudentDepartment
+    ? servingStudents.filter((item) => getQueueItemDepartment(item) === selectedStudentDepartment)
+    : servingStudents;
+
+  const filteredWaitingStudents = selectedStudentDepartment
+    ? waitingStudents.filter((item) => getQueueItemDepartment(item) === selectedStudentDepartment)
+    : waitingStudents;
+
+  const groupQueueByDepartment = (items: LiveQueueItem[]) => {
+    return Object.entries(
+      items.reduce<Record<string, LiveQueueItem[]>>((acc, item) => {
+        const dept = getQueueItemDepartment(item);
+        if (!acc[dept]) {
+          acc[dept] = [];
+        }
+        acc[dept].push(item);
+        return acc;
+      }, {})
+    ).sort(([left], [right]) => left.localeCompare(right));
+  };
 
   return (
     <div className="min-h-[100dvh] flex flex-col" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
@@ -642,46 +669,123 @@ export default function Login() {
         <div className="mt-8 pt-8 border-t-2" style={{ borderColor: 'var(--clay-border)' }}>
 
           <div className="space-y-4">
+            {/* Queue Filter Dropdown */}
+            <div className="mb-6">
+              <select
+                value={selectedStudentDepartment || ""}
+                onChange={(e) => setSelectedStudentDepartment(e.target.value || null)}
+                className="w-full p-4 rounded-2xl font-bold text-lg appearance-none transition-all"
+                style={{
+                  background: 'linear-gradient(135deg, var(--clay-bg-secondary) 0%, var(--clay-bg-tertiary) 100%)',
+                  color: 'var(--clay-text-primary)',
+                  border: '2px solid var(--clay-accent-warm)',
+                  cursor: 'pointer',
+                  backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 1rem center',
+                  backgroundSize: '1.5em 1.5em',
+                  paddingRight: '2.5rem'
+                }}
+              >
+                <option value="">ALL DEPARTMENTS</option>
+                {departmentGroups.map((group) => (
+                  <option key={group.department} value={group.department}>
+                    {group.department}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Serving Students (Ongoing Consultations) */}
-            {liveQueue.filter(item => item.status === "serving").length > 0 && (
+            {filteredServingStudents.length > 0 && (
               <div>
                 <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-success" style={{ color: 'white' }}>
-                  NOW SERVING ({liveQueue.filter(item => item.status === "serving").length})
+                  NOW SERVING ({filteredServingStudents.length})
                 </h3>
                 <div className="space-y-3">
-                  {liveQueue.filter(item => item.status === "serving").map((item) => (
-                    <div key={item.id} className="p-4 rounded-2xl card" style={{
-                      background: 'linear-gradient(135deg, rgba(168, 213, 186, 0.2) 0%, rgba(168, 213, 186, 0.05) 100%)',
-                      borderColor: 'rgba(168, 213, 186, 0.3)'
-                    }}>
-                      <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
-                      {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
-                    </div>
-                  ))}
+                  {selectedStudentDepartment === null ? (
+                    // Show grouped by department
+                    groupQueueByDepartment(filteredServingStudents).map(([dept, items]) => (
+                      <div key={dept}>
+                        <p className="text-sm font-bold px-4 py-2 uppercase" style={{ color: 'var(--clay-accent-warm)' }}>
+                          {dept}
+                        </p>
+                        <div className="space-y-2 ml-2">
+                          {items.map((item) => (
+                            <div key={item.id} className="p-4 rounded-2xl card" style={{
+                              background: 'linear-gradient(135deg, rgba(168, 213, 186, 0.2) 0%, rgba(168, 213, 186, 0.05) 100%)',
+                              borderColor: 'rgba(168, 213, 186, 0.3)'
+                            }}>
+                              <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
+                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                              {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
+                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    // Show flat list for selected department
+                    filteredServingStudents.map((item) => (
+                      <div key={item.id} className="p-4 rounded-2xl card" style={{
+                        background: 'linear-gradient(135deg, rgba(168, 213, 186, 0.2) 0%, rgba(168, 213, 186, 0.05) 100%)',
+                        borderColor: 'rgba(168, 213, 186, 0.3)'
+                      }}>
+                        <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
+                        <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                        {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
+                        <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
 
             {/* Waiting Students (Queue) */}
-            {liveQueue.filter(item => item.status === "waiting").length > 0 && (
+            {filteredWaitingStudents.length > 0 && (
               <div>
                 <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-info" style={{ color: 'white' }}>
-                  IN QUEUE ({liveQueue.filter(item => item.status === "waiting").length})
+                  IN QUEUE ({filteredWaitingStudents.length})
                 </h3>
                 <div className="space-y-3">
-                  {liveQueue.filter(item => item.status === "waiting").map((item) => (
-                    <div key={item.id} className="p-4 rounded-2xl card" style={{
-                      background: 'linear-gradient(135deg, rgba(200, 184, 228, 0.2) 0%, rgba(200, 184, 228, 0.05) 100%)',
-                      borderColor: 'rgba(200, 184, 228, 0.3)'
-                    }}>
-                      <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
-                      {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
-                      <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
-                    </div>
-                  ))}
+                  {selectedStudentDepartment === null ? (
+                    // Show grouped by department
+                    groupQueueByDepartment(filteredWaitingStudents).map(([dept, items]) => (
+                      <div key={dept}>
+                        <p className="text-sm font-bold px-4 py-2 uppercase" style={{ color: 'var(--clay-accent-warm)' }}>
+                          {dept}
+                        </p>
+                        <div className="space-y-2 ml-2">
+                          {items.map((item) => (
+                            <div key={item.id} className="p-4 rounded-2xl card" style={{
+                              background: 'linear-gradient(135deg, rgba(200, 184, 228, 0.2) 0%, rgba(200, 184, 228, 0.05) 100%)',
+                              borderColor: 'rgba(200, 184, 228, 0.3)'
+                            }}>
+                              <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
+                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                              {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
+                              <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    // Show flat list for selected department
+                    filteredWaitingStudents.map((item) => (
+                      <div key={item.id} className="p-4 rounded-2xl card" style={{
+                        background: 'linear-gradient(135deg, rgba(200, 184, 228, 0.2) 0%, rgba(200, 184, 228, 0.05) 100%)',
+                        borderColor: 'rgba(200, 184, 228, 0.3)'
+                      }}>
+                        <p className="text-lg font-bold" style={{ color: 'var(--clay-text-primary)' }}>{item.student_name}</p>
+                        <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Faculty: <strong>{item.faculty_name}</strong></p>
+                        {item.consultation_date_display && <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Date: <strong>{item.consultation_date_display}</strong></p>}
+                        <p className="text-sm" style={{ color: 'var(--clay-text-secondary)' }}>Time: <strong>{formatLiveMonitorTime(item.time_period)}</strong></p>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -695,8 +799,8 @@ export default function Login() {
               {/* Department Filter Dropdown */}
               <div className="mb-6">
                 <select
-                  value={selectedDepartment || ""}
-                  onChange={(e) => setSelectedDepartment(e.target.value || null)}
+                  value={selectedFacultyDepartment || ""}
+                  onChange={(e) => setSelectedFacultyDepartment(e.target.value || null)}
                   className="w-full p-4 rounded-2xl font-bold text-lg appearance-none transition-all"
                   style={{
                     background: 'linear-gradient(135deg, var(--clay-bg-secondary) 0%, var(--clay-bg-tertiary) 100%)',
@@ -721,7 +825,7 @@ export default function Login() {
 
               {/* Faculty List - Grouped by department when showing all, flat when filtered */}
               <div className="space-y-3">
-                {selectedDepartment === null ? (
+                {selectedFacultyDepartment === null ? (
                   // Show grouped by department
                   departmentGroups.map((group) => (
                     <div key={group.department}>
@@ -755,7 +859,7 @@ export default function Login() {
                 ) : (
                   // Show flat list for selected department
                   availableFaculty
-                    .filter(f => f.department === selectedDepartment)
+                    .filter(f => f.department === selectedFacultyDepartment)
                     .map((f) => (
                       <div key={f.id} className="p-4 rounded-2xl card" style={{
                         background: f.status === "busy"

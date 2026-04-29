@@ -318,8 +318,8 @@ export default function KioskView() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-x-hidden">
-        <div className="flex-1 min-h-0 p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden max-w-5xl w-full mx-auto lg:mx-0">
+      <main className="flex-1 min-h-0 flex flex-col overflow-x-hidden">
+        <div className="flex-1 min-h-0 p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden max-w-5xl w-full mx-auto">
           <div className="mb-6 sm:mb-8">
             <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
               Select Faculty & Book Appointment
@@ -366,7 +366,7 @@ export default function KioskView() {
                   <p className="text-2xl font-medium" style={{ color: 'var(--clay-text-primary)' }}>No faculty available for advance booking.</p>
                   <p className="text-lg mt-2" style={{ color: 'var(--clay-text-secondary)' }}>Faculty schedules will appear once they set their availability for the week.</p>
                   <button 
-                    onClick={fetchFaculty}
+                    onClick={() => fetchFaculty()}
                     className="mt-6 px-6 py-3 font-bold rounded-xl transition-all btn btn-secondary"
                   >
                     Retry Fetch
