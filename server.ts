@@ -564,6 +564,7 @@ function deleteFacultyGoogleAuthData(facultyId: string) {
 
 let supabaseClient: SupabaseClient | null = null;
 let telegramBot: TelegramBot | null = null;
+let telegramBotInitialized = false;
 
 // Setup SendGrid
 async function setupSendGrid() {
@@ -580,11 +581,37 @@ async function setupSendGrid() {
 }
 setupSendGrid();
 
+// Cleanup Telegram Bot
+async function cleanupTelegramBot() {
+  if (telegramBot) {
+    try {
+      console.log("[Telegram] Stopping bot instance...");
+      await telegramBot.stopPolling();
+      console.log("[Telegram] Bot polling stopped");
+    } catch (error: any) {
+      console.error("[Telegram] Error stopping bot:", error.message);
+    } finally {
+      telegramBot = null;
+      telegramBotInitialized = false;
+    }
+  }
+}
+
 // Setup Telegram Bot
 async function setupTelegramBot() {
+  // Prevent multiple initialization attempts
+  if (telegramBotInitialized) {
+    console.log("[Telegram] Bot already initialized, skipping setup");
+    return;
+  }
+
   const telegramToken = unwrapEnvValue(process.env.TELEGRAM_BOT_TOKEN);
   if (telegramToken) {
     try {
+      // Stop any existing bot instance first
+      await cleanupTelegramBot();
+
+      telegramBotInitialized = true;
       telegramBot = new TelegramBot(telegramToken, { polling: true });
       console.log("✅ Telegram Bot Service Initialized Successfully");
 
@@ -595,9 +622,13 @@ async function setupTelegramBot() {
 
         const welcomeMessage = `👋 Welcome to KIOSK Queue Management!\n\n📋 Your Chat ID: \`${chatId}\`\n\nYou will receive consultation reminders here. Please keep this chat open to receive notifications.`;
 
-        telegramBot!.sendMessage(chatId, welcomeMessage, {
-          parse_mode: "Markdown",
-        });
+        if (telegramBot) {
+          telegramBot.sendMessage(chatId, welcomeMessage, {
+            parse_mode: "Markdown",
+          }).catch((err: any) => {
+            console.error("[Telegram] Error sending welcome message:", err.message);
+          });
+        }
 
         console.log(`[Telegram] /start command from ${firstName} (ID: ${chatId})`);
       });
@@ -606,14 +637,28 @@ async function setupTelegramBot() {
       telegramBot.on("message", (msg) => {
         const chatId = msg.chat.id;
         if (msg.text && !msg.text.startsWith("/")) {
-          telegramBot!.sendMessage(
-            chatId,
-            "Hello! I'm the KIOSK Queue Bot. I'll send you consultation reminders.\n\nUse /start to get your Chat ID."
-          );
+          if (telegramBot) {
+            telegramBot.sendMessage(
+              chatId,
+              "Hello! I'm the KIOSK Queue Bot. I'll send you consultation reminders.\n\nUse /start to get your Chat ID."
+            ).catch((err: any) => {
+              console.error("[Telegram] Error sending message:", err.message);
+            });
+          }
+        }
+      });
+
+      // Handle polling errors
+      telegramBot.on("polling_error", (error: any) => {
+        if (error.code === "ETELEGRAM" && error.message?.includes("409")) {
+          console.warn("[Telegram] 409 Conflict detected - another instance may be running. Will retry...");
+        } else {
+          console.error("[Telegram] Polling error:", error.code, error.message);
         }
       });
     } catch (error: any) {
       console.error("❌ Failed to initialize Telegram Bot:", error.message);
+      telegramBotInitialized = false;
     }
   } else {
     console.warn("⚠️ TELEGRAM_BOT_TOKEN not set. Telegram notifications will be disabled.");
@@ -6328,8 +6373,12 @@ async function startServer() {
   });
 
   // Graceful shutdown for Render deployments
-  const gracefulShutdown = () => {
+  const gracefulShutdown = async () => {
     console.log("Received shutdown signal, gracefully closing...");
+    
+    // Clean up Telegram bot first
+    await cleanupTelegramBot();
+    
     server.close(() => {
       console.log("Server closed");
       process.exit(0);
