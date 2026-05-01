@@ -73,8 +73,12 @@ export function useFaculties() {
       setFacError("Password is required.");
       return;
     }
-    if (facPassword.trim().length < 6) {
-      setFacError("Password must be at least 6 characters long.");
+    if (facPassword.trim().length < 8) {
+      setFacError("Password must be at least 8 characters long.");
+      return;
+    }
+    if (!/[a-zA-Z]/.test(facPassword) || !/[0-9]/.test(facPassword)) {
+      setFacError("Password must contain both letters and numbers (alphanumeric).");
       return;
     }
 
@@ -179,8 +183,12 @@ export function useFaculties() {
       setFacultyPasswordError("Password is required.");
       return;
     }
-    if (facultyPasswordInput.trim().length < 6) {
-      setFacultyPasswordError("Password must be at least 6 characters long.");
+    if (facultyPasswordInput.trim().length < 8) {
+      setFacultyPasswordError("Password must be at least 8 characters long.");
+      return;
+    }
+    if (!/[a-zA-Z]/.test(facultyPasswordInput) || !/[0-9]/.test(facultyPasswordInput)) {
+      setFacultyPasswordError("Password must contain both letters and numbers (alphanumeric).");
       return;
     }
     if (facultyPasswordInput !== facultyPasswordConfirm) {

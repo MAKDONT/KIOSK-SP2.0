@@ -270,6 +270,46 @@ export default function Login() {
     return todaySlots.map((slot) => `${formatTime(slot.start)} - ${formatTime(slot.end)}`).join(", ");
   };
 
+  const getUpcomingDayNames = () => {
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const upcomingDays: string[] = [];
+    
+    for (let i = 0; i < 7; i++) {
+      const date = new Date();
+      date.setDate(date.getDate() + i);
+      upcomingDays.push(days[date.getDay()]);
+    }
+    
+    return upcomingDays;
+  };
+
+  const getUpcomingAvailabilitySlots = (f: Faculty): AvailabilitySlot[] => {
+    try {
+      const parsed = Array.isArray(f.full_name)
+        ? f.full_name
+        : JSON.parse(f.full_name || "[]");
+      
+      if (Array.isArray(parsed)) {
+        const upcomingDays = getUpcomingDayNames();
+        return parsed.filter((slot: unknown): slot is AvailabilitySlot => {
+          if (!slot || typeof slot !== "object") return false;
+          const candidate = slot as Partial<AvailabilitySlot>;
+          const day = candidate.day;
+          return (
+            upcomingDays.includes(day as string) &&
+            typeof candidate.start === "string" &&
+            typeof candidate.end === "string" &&
+            candidate.start.length > 0 &&
+            candidate.end.length > 0
+          );
+        });
+      }
+    } catch (e) {
+      // ignore
+    }
+    return [];
+  };
+
   const completeStudentLogin = useCallback(async (studentIdentifier: string, mode: "scan" | "manual") => {
     const normalizedIdentifier = studentIdentifier.trim();
     if (!normalizedIdentifier) {
@@ -278,8 +318,8 @@ export default function Login() {
 
     // Check if any faculty is available before allowing student login
     // Calculate available faculty within callback to avoid dependency issues
-    const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
-    if (availableFaculty.length === 0) {
+    const availableFacultyCheck = faculty.filter((f) => getUpcomingAvailabilitySlots(f).length > 0);
+    if (availableFacultyCheck.length === 0) {
       throw new Error("No faculty members are currently available. Please try again later.");
     }
 
@@ -481,7 +521,7 @@ export default function Login() {
     }
   };
 
-  const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
+  const availableFaculty = faculty.filter((f) => getUpcomingAvailabilitySlots(f).length > 0);
   const departmentGroups = Object.entries(
     availableFaculty.reduce<Record<string, Faculty[]>>((acc, item) => {
       const departmentName = item.department || "Unassigned Department";
@@ -758,7 +798,7 @@ export default function Login() {
             {filteredServingStudents.length > 0 && (
               <div>
                 <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-success" style={{ color: 'white' }}>
-                  NOW SERVING ({filteredServingStudents.length})
+                  IN CONSULTATION ({filteredServingStudents.length})
                 </h3>
                 <div className="space-y-3">
                   {selectedStudentDepartment === null ? (

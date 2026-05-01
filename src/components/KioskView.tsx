@@ -359,6 +359,19 @@ export default function KioskView() {
     );
   }
 
+  const getUpcomingDayNames = () => {
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const upcomingDays: string[] = [];
+    
+    for (let i = 0; i < 7; i++) {
+      const date = new Date();
+      date.setDate(date.getDate() + i);
+      upcomingDays.push(days[date.getDay()]);
+    }
+    
+    return upcomingDays;
+  };
+
   const availableFaculty = faculty.filter((f) => {
     try {
       // full_name can be either already-parsed array or JSON string
@@ -366,8 +379,15 @@ export default function KioskView() {
         ? f.full_name 
         : JSON.parse(f.full_name || "[]");
       
-      const hasSlotsToday = Array.isArray(parsed) && parsed.length > 0;
-      return hasSlotsToday;
+      if (Array.isArray(parsed)) {
+        const upcomingDays = getUpcomingDayNames();
+        const hasUpcomingSlots = parsed.some((slot: any) => {
+          const day = slot.day || slot.day_name;
+          return upcomingDays.includes(day);
+        });
+        return hasUpcomingSlots;
+      }
+      return false;
     } catch (err) {
       return false;
     }
@@ -424,7 +444,7 @@ export default function KioskView() {
               Select Faculty & Book Appointment
             </h2>
             <p className="text-sm sm:text-base mt-2" style={{ color: 'var(--clay-text-secondary)' }}>
-              View faculty availability for the entire week (Mon-Fri) and book your consultation in advance
+              View faculty availability for the entire week (Sun-Sat) and book your consultation in advance
             </p>
           </div>
           

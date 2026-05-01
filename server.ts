@@ -3226,7 +3226,7 @@ async function startServer() {
       }
       
       const { availability } = req.body;
-      const allowedDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+      const allowedDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
       if (!availability) {
         return res.status(400).json({ error: "Availability data is required" });
       }
@@ -3246,7 +3246,7 @@ async function startServer() {
         const slot = availability[i];
         const day = typeof slot?.day === "string" ? slot.day : typeof slot?.day_name === "string" ? slot.day_name : "";
         if (!allowedDays.includes(day)) {
-          return res.status(400).json({ error: `Invalid day in availability slot ${i + 1}. Only Monday to Friday are allowed.` });
+          return res.status(400).json({ error: `Invalid day in availability slot ${i + 1}.` });
         }
       }
 
@@ -4351,13 +4351,10 @@ async function startServer() {
       
       const datesToShow: Date[] = [];
 
-      // Show next 5 weekdays from today (skips weekends).
+      // Show next 7 days from today (includes all days Mon-Sun).
       const cursor = new Date(today);
-      while (datesToShow.length < 5) {
-        const dayIdx = cursor.getDay();
-        if (dayIdx !== 0 && dayIdx !== 6) {
-          datesToShow.push(new Date(cursor));
-        }
+      while (datesToShow.length < 7) {
+        datesToShow.push(new Date(cursor));
         cursor.setDate(cursor.getDate() + 1);
       }
       

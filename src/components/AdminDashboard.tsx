@@ -68,6 +68,7 @@ export default function AdminDashboard() {
   const [facPassword, setFacPassword] = useState("");
   const [addingFac, setAddingFac] = useState(false);
   const [facError, setFacError] = useState("");
+  const [facFormSubmitted, setFacFormSubmitted] = useState(false);
   const [createFacPasswordModal, setCreateFacPasswordModal] = useState(false);
   const [createFacPassword, setCreateFacPassword] = useState("");
   const [createFacPasswordError, setCreateFacPasswordError] = useState("");
@@ -585,6 +586,7 @@ export default function AdminDashboard() {
 
   const handleAddFaculty = (e: React.FormEvent) => {
     e.preventDefault();
+    setFacFormSubmitted(true);
     setFacError("");
 
     if (!facName.trim()) {
@@ -614,8 +616,12 @@ export default function AdminDashboard() {
       setFacError("Faculty password is required.");
       return;
     }
-    if (facPassword.trim().length < 6) {
-      setFacError("Faculty password must be at least 6 characters long.");
+    if (facPassword.trim().length < 8) {
+      setFacError("Faculty password must be at least 8 characters long.");
+      return;
+    }
+    if (!/[a-zA-Z]/.test(facPassword) || !/[0-9]/.test(facPassword)) {
+      setFacError("Faculty password must contain both letters and numbers (alphanumeric).");
       return;
     }
 
@@ -653,6 +659,7 @@ export default function AdminDashboard() {
       setFacDept("");
       setFacEmail("");
       setFacPassword("");
+      setFacFormSubmitted(false);
       setCreateFacPasswordModal(false);
       setCreateFacPassword("");
       fetchFaculties();
@@ -992,8 +999,12 @@ export default function AdminDashboard() {
       setFacultyPasswordError("Password is required.");
       return;
     }
-    if (facultyPasswordInput.trim().length < 6) {
-      setFacultyPasswordError("Password must be at least 6 characters long.");
+    if (facultyPasswordInput.trim().length < 8) {
+      setFacultyPasswordError("Password must be at least 8 characters long.");
+      return;
+    }
+    if (!/[a-zA-Z]/.test(facultyPasswordInput) || !/[0-9]/.test(facultyPasswordInput)) {
+      setFacultyPasswordError("Password must contain both letters and numbers (alphanumeric).");
       return;
     }
     if (facultyPasswordInput !== facultyPasswordConfirm) {
@@ -1954,6 +1965,31 @@ export default function AdminDashboard() {
                   {showAddFacPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
+              {facFormSubmitted && facPassword && (
+                <div className="mt-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200 space-y-2">
+                  <p className="text-xs font-semibold text-neutral-600 mb-2">Password Requirements:</p>
+                  <div className="space-y-1 text-xs">
+                    <div className={`flex items-center gap-2 ${facPassword.length >= 8 ? 'text-emerald-600' : 'text-neutral-500'}`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${facPassword.length >= 8 ? 'bg-emerald-100' : 'bg-neutral-200'}`}>
+                        {facPassword.length >= 8 ? '✓' : '○'}
+                      </span>
+                      At least 8 characters
+                    </div>
+                    <div className={`flex items-center gap-2 ${/[a-zA-Z]/.test(facPassword) ? 'text-emerald-600' : 'text-neutral-500'}`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${/[a-zA-Z]/.test(facPassword) ? 'bg-emerald-100' : 'bg-neutral-200'}`}>
+                        {/[a-zA-Z]/.test(facPassword) ? '✓' : '○'}
+                      </span>
+                      Contains letters
+                    </div>
+                    <div className={`flex items-center gap-2 ${/[0-9]/.test(facPassword) ? 'text-emerald-600' : 'text-neutral-500'}`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${/[0-9]/.test(facPassword) ? 'bg-emerald-100' : 'bg-neutral-200'}`}>
+                        {/[0-9]/.test(facPassword) ? '✓' : '○'}
+                      </span>
+                      Contains numbers
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <button

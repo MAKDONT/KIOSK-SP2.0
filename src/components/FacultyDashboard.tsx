@@ -33,7 +33,7 @@ interface RecordingContext {
   studentNumber: string;
 }
 
-const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 const readJsonResponse = async (response: Response, fallbackMessage: string) => {
   const contentType = response.headers.get("content-type") || "";
@@ -990,7 +990,7 @@ export default function FacultyDashboard() {
         return;
       }
       if (!WEEKDAY_OPTIONS.includes(slot.day)) {
-        alert(`Time Slot ${i + 1} has an invalid day. Only Monday to Friday are allowed.`);
+        alert(`Time Slot ${i + 1} has an invalid day.`);
         return;
       }
     }
@@ -1911,13 +1911,21 @@ export default function FacultyDashboard() {
       {showAudioPermissionModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl flex flex-col gap-6">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
-                <svg className="w-6 h-6 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2z" />
-                </svg>
-              </div>
-              <h2 className="text-xl font-bold text-neutral-900">Enable Audio Recording</h2>
+<div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
+            <svg className="w-6 h-6 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm6 0a1 1 0 100-2 1 1 0 000 2z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-neutral-900">Enable Audio Recording</h2>
+        </div>
+        <button
+          onClick={() => setShowAudioPermissionModal(false)}
+          className="text-neutral-400 hover:text-neutral-600 p-1 transition-colors"
+        >
+          <XCircle className="w-6 h-6" />
+        </button>
             </div>
             
             <p className="text-neutral-600 leading-relaxed">
