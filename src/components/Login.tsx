@@ -49,6 +49,7 @@ export default function Login() {
   const [studentName, setStudentName] = useState("");
   const [studentEmail, setStudentEmail] = useState("");
   const [course, setCourse] = useState("");
+  const [studentPassword, setStudentPassword] = useState("");
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -276,30 +277,72 @@ export default function Login() {
     }
 
     // Check if any faculty is available before allowing student login
+    // Calculate available faculty within callback to avoid dependency issues
+    const availableFaculty = faculty.filter((f) => getTodayAvailabilitySlots(f).length > 0);
     if (availableFaculty.length === 0) {
       throw new Error("No faculty members are currently available. Please try again later.");
     }
 
     if (mode === "scan") {
       // Check if student exists
+      console.log(`🔍 Scan lookup: Raw="${studentIdentifier}", Normalized="${normalizedIdentifier}"`);
+      console.log(`   Length: ${normalizedIdentifier.length}, Trimmed: "${normalizedIdentifier.trim()}"`);
       const res = await fetch(`/api/students/${encodeURIComponent(normalizedIdentifier)}`);
+      
       if (!res.ok) {
+        const errorData = await res.json();
+        console.error(`❌ Scan lookup failed with status ${res.status}:`, errorData);
         throw new Error("Student not found in database. Please use Manual Input.");
       }
+      
       const studentData = await res.json();
+      console.log(`✅ Scan lookup successful! Found student:`, {
+        id: studentData.id,
+        name: studentData.name,
+        email: studentData.email,
+        course: studentData.course,
+        hasPassword: !!studentData.password
+      });
+      
       localStorage.setItem("student_id", studentData.id);
       localStorage.setItem("student_name", studentData.name);
       localStorage.setItem("student_email", studentData.email || "");
       localStorage.setItem("student_course", studentData.course || "");
+      const passwordToStore = (studentData.password || "").trim();
+      console.log(`🔐 Storing password to localStorage: "${passwordToStore}" (length: ${passwordToStore.length})`);
+      localStorage.setItem("student_password", passwordToStore);
     } else {
-      // Manual input
-      if (!normalizedIdentifier || !studentName || !studentEmail || !course) {
-        throw new Error("Please fill in all fields.");
+      // Manual input - register student to database immediately
+      if (!normalizedIdentifier || !studentName || !studentEmail || !course || !studentPassword) {
+        throw new Error("Please fill in all fields including password.");
       }
-      localStorage.setItem("student_id", normalizedIdentifier);
-      localStorage.setItem("student_name", studentName);
-      localStorage.setItem("student_email", studentEmail);
+
+      // Register student on the server
+      const registerRes = await fetch("/api/students/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_number: normalizedIdentifier, // Use the identifier they entered
+          full_name: studentName,
+          email: studentEmail,
+          course: course,
+          password: studentPassword
+        })
+      });
+
+      if (!registerRes.ok) {
+        const errorData = await registerRes.json();
+        throw new Error(errorData.error || "Failed to register student");
+      }
+
+      const registeredStudent = await registerRes.json();
+      
+      // Save to localStorage
+      localStorage.setItem("student_id", registeredStudent.id);
+      localStorage.setItem("student_name", registeredStudent.name);
+      localStorage.setItem("student_email", registeredStudent.email);
       localStorage.setItem("student_course", course);
+      localStorage.setItem("student_password", studentPassword.trim()); // Store password (trimmed)
     }
 
     localStorage.setItem("user_role", "student");
@@ -313,7 +356,7 @@ export default function Login() {
     } else {
       navigate(`/kiosk`);
     }
-  }, [faculty, course, navigate, studentEmail, studentName]);
+  }, [faculty, course, navigate, studentEmail, studentName, studentPassword]);
 
   const triggerAutoScanLogin = useCallback(async (rawScannedValue: string) => {
     const scannedValue = rawScannedValue.trim();
@@ -644,6 +687,21 @@ export default function Login() {
                       </option>
                     ))}
                   </select>
+                  <input
+                    type="password"
+                    value={studentPassword}
+                    onChange={(e) => setStudentPassword(e.target.value)}
+                    disabled={availableFaculty.length === 0}
+                    placeholder="Create Password"
+                    className="w-full p-5 border-3 rounded-2xl outline-none transition-colors text-2xl font-semibold"
+                    style={{
+                      borderColor: 'var(--clay-border)',
+                      background: availableFaculty.length === 0 ? 'rgba(0,0,0,0.05)' : 'var(--clay-bg-secondary)',
+                      color: availableFaculty.length === 0 ? 'rgba(0,0,0,0.5)' : 'var(--clay-text-primary)',
+                      cursor: availableFaculty.length === 0 ? 'not-allowed' : 'auto'
+                    }}
+                    required
+                  />
                 </div>
               )}
             </div>

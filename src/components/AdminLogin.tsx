@@ -82,7 +82,15 @@ export default function AdminLogin() {
         body: JSON.stringify({ password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Invalid admin password");
+      if (!res.ok) {
+        // Handle specific error cases
+        if (res.status === 403 && data.error === "Admin account not configured") {
+          setError("Admin account not yet configured. Please set up your admin password using Google verification.");
+          setView("reset_verify");
+          return;
+        }
+        throw new Error(data.error || "Invalid admin password");
+      }
 
       localStorage.setItem("user_role", "admin");
       navigate("/admin/dashboard");

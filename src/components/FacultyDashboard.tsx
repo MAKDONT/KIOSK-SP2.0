@@ -912,6 +912,43 @@ export default function FacultyDashboard() {
 
   const selectedFacultyData = faculty.find(f => f.id === selectedFaculty);
 
+  const convertTo12HourFormat = (time24: string): string => {
+    const [hours, minutes] = time24.split(':');
+    const hour = parseInt(hours, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return `${hour12}:${minutes} ${ampm}`;
+  };
+
+  const getScheduleDisplay = () => {
+    if (!selectedFacultyData) return "No schedule";
+    
+    try {
+      const parsed = Array.isArray(selectedFacultyData.full_name)
+        ? selectedFacultyData.full_name
+        : JSON.parse(selectedFacultyData.full_name || "[]");
+      
+      if (!Array.isArray(parsed) || parsed.length === 0) return "No schedule set";
+      
+      // Get today's day name
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const today = new Date().getDay();
+      const todayName = days[today];
+      
+      // Find today's slot
+      const todaySlot = parsed.find((slot: any) => slot.day === todayName);
+      if (todaySlot) {
+        return `Today: ${convertTo12HourFormat(todaySlot.start)} - ${convertTo12HourFormat(todaySlot.end)}`;
+      }
+      
+      // Find next available day
+      const nextSlot = parsed[0];
+      return `Next: ${nextSlot.day} ${convertTo12HourFormat(nextSlot.start)} - ${convertTo12HourFormat(nextSlot.end)}`;
+    } catch (e) {
+      return "Schedule available";
+    }
+  };
+
   const toggleFacultyStatus = async () => {
     if (!selectedFacultyData) return;
     const newStatus = selectedFacultyData.status === 'available' ? 'offline' : 'available';
@@ -1468,7 +1505,7 @@ export default function FacultyDashboard() {
                       background: selectedFacultyData.status === 'available' ? 'var(--clay-accent-sage)' : selectedFacultyData.status === 'busy' ? 'var(--clay-accent-warm)' : 'var(--clay-text-light)',
                       animation: selectedFacultyData.status === 'available' ? 'pulse 2s infinite' : 'none'
                     }} />
-                    {selectedFacultyData.status === 'available' ? 'Accepting Consultations' : 
+                    {selectedFacultyData.status === 'available' ? getScheduleDisplay() : 
                      selectedFacultyData.status === 'busy' ? 'Busy' : 'Offline'}
                   </p>
                 </div>

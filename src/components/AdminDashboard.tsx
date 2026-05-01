@@ -946,14 +946,27 @@ export default function AdminDashboard() {
         body: JSON.stringify({ password: deleteFacultyPassword })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to delete faculty");
+      
+      if (!res.ok) {
+        // Handle specific HTTP status codes with better error messages
+        if (res.status === 409) {
+          // Conflict - likely due to foreign key constraints
+          const errorMsg = data.details?.instruction 
+            ? `${data.error}\n\n${data.details.instruction}`
+            : data.error || "Cannot delete faculty due to existing records";
+          setDeleteFacultyPasswordError(errorMsg);
+          return;
+        }
+        throw new Error(data.error || "Failed to delete faculty");
+      }
+      
       fetchFaculties();
       setDeleteFacultyModal({ isOpen: false, id: "", name: "" });
       setDeleteFacultyPassword("");
       setDeleteFacultyPasswordError("");
       alert("Faculty deleted successfully");
     } catch (err: any) {
-      setDeleteFacultyPasswordError(err.message);
+      setDeleteFacultyPasswordError(err.message || "An error occurred while deleting faculty");
     }
   };
 

@@ -42,6 +42,12 @@ export default function KioskView() {
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState<any>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordAttempt, setPasswordAttempt] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [showSetPasswordMode, setShowSetPasswordMode] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -209,29 +215,122 @@ export default function KioskView() {
       return;
     }
 
+    // Show password confirmation modal
+    setShowPasswordModal(true);
+    setPasswordAttempt("");
+    setPasswordError("");
+  };
+
+  const handlePasswordConfirm = async () => {
+    const storedPassword = safeGetItem("student_password", "").trim();
+    
+    if (!passwordAttempt) {
+      setPasswordError("Please enter your password.");
+      return;
+    }
+
+    console.log(`🔐 Password verification: Stored="${storedPassword}" (len:${storedPassword.length}) vs Entered="${passwordAttempt.trim()}" (len:${passwordAttempt.trim().length})`);
+    
+    // Check if student has no password set
+    if (!storedPassword) {
+      console.log(`⚠️ No password found in database for this student`);
+      setPasswordError("No password is set for your account. Please contact the faculty office to set your password.");
+      return;
+    }
+
+    if (passwordAttempt.trim() !== storedPassword) {
+      console.log(`❌ Password mismatch! Expected: "${storedPassword}"`);
+      setPasswordError("Incorrect password. Please try again.");
+      setPasswordAttempt("");
+      return;
+    }
+
+    console.log(`✅ Password match!`);
+    // Password is correct, proceed with queue join
+    setShowPasswordModal(false);
+    setPasswordAttempt("");
+    setPasswordError("");
+    await submitQueueJoin();
+  };
+
+  const handleSetPassword = async () => {
+    if (!newPassword.trim()) {
+      setPasswordError("Please enter a password.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError("Passwords do not match.");
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordError("Password must be at least 4 characters long.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/students/${studentId}/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword })
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to set password");
+      }
+
+      // Store password to localStorage and proceed
+      const trimmedPassword = newPassword.trim();
+      localStorage.setItem("student_password", trimmedPassword);
+      console.log(`✅ Password set successfully: "${trimmedPassword}"`);
+      
+      setShowSetPasswordMode(false);
+      setShowPasswordModal(false);
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordError("");
+      setPasswordAttempt("");
+      
+      // Proceed with queue join
+      await submitQueueJoin();
+    } catch (err: any) {
+      setPasswordError(err.message || "Failed to set password");
+    }
+  };
+
+  const submitQueueJoin = async () => {
     setLoading(true);
     setError("");
 
     try {
+      const studentPassword = safeGetItem("student_password", "");
+      const payload = {
+        student_id: studentId,
+        faculty_id: selectedFaculty,
+        source: "web",
+        student_name: studentName,
+        student_email: studentEmail,
+        course: course,
+        purpose: consultationConcern.trim(),
+        time_period: selectedDay ? `${selectedDay} ${selectedTimePeriod}` : selectedTimePeriod,
+        queue_date: selectedDate,
+        student_password: studentPassword,
+      };
+      
+      console.log(`📤 Sending queue join request:`, payload);
+      
       const res = await fetch("/api/queue/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          student_id: studentId,
-          faculty_id: selectedFaculty,
-          source: "web",
-          student_name: studentName,
-          student_email: studentEmail,
-          course: course,
-          purpose: consultationConcern.trim(),
-          time_period: selectedDay ? `${selectedDay} ${selectedTimePeriod}` : selectedTimePeriod,
-          queue_date: selectedDate,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
+        console.error(`❌ Queue join failed:`, data);
         throw new Error(data.error || "Failed to join queue");
       }
       setSuccess(data);
@@ -517,6 +616,157 @@ export default function KioskView() {
           </div>
         </div>
       </main>
+
+      {/* Password Confirmation Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 sm:p-12 max-w-md w-full space-y-6 card shadow-2xl animate-in fade-in scale-in">
+            {!showSetPasswordMode ? (
+              <>
+                <h2 className="text-3xl font-bold text-center" style={{ color: 'var(--clay-text-primary)' }}>
+                  Confirm Password
+                </h2>
+                <p className="text-lg text-center" style={{ color: 'var(--clay-text-secondary)' }}>
+                  Please enter your password to confirm your consultation booking.
+                </p>
+                
+                <div className="space-y-4">
+                  <input
+                    type="password"
+                    value={passwordAttempt}
+                    onChange={(e) => {
+                      setPasswordAttempt(e.target.value);
+                      setPasswordError("");
+                    }}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handlePasswordConfirm();
+                      }
+                    }}
+                    placeholder="Enter your password"
+                    className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
+                    style={{
+                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      background: 'var(--clay-bg-secondary)',
+                      color: 'var(--clay-text-primary)'
+                    }}
+                    autoFocus
+                  />
+                  {passwordError && (
+                    <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
+                      {passwordError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button
+                    onClick={() => {
+                      setShowPasswordModal(false);
+                      setPasswordAttempt("");
+                      setPasswordError("");
+                      setShowSetPasswordMode(false);
+                    }}
+                    className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all"
+                    style={{
+                      background: 'var(--clay-bg-tertiary)',
+                      color: 'var(--clay-text-primary)'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePasswordConfirm}
+                    disabled={!passwordAttempt}
+                    className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-3xl font-bold text-center" style={{ color: 'var(--clay-text-primary)' }}>
+                  Set Password
+                </h2>
+                <p className="text-lg text-center" style={{ color: 'var(--clay-text-secondary)' }}>
+                  Create a password for your account.
+                </p>
+                
+                <div className="space-y-4">
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      setPasswordError("");
+                    }}
+                    placeholder="Create Password"
+                    className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
+                    style={{
+                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      background: 'var(--clay-bg-secondary)',
+                      color: 'var(--clay-text-primary)'
+                    }}
+                    autoFocus
+                  />
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      setPasswordError("");
+                    }}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSetPassword();
+                      }
+                    }}
+                    placeholder="Confirm Password"
+                    className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
+                    style={{
+                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      background: 'var(--clay-bg-secondary)',
+                      color: 'var(--clay-text-primary)'
+                    }}
+                  />
+                  {passwordError && (
+                    <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
+                      {passwordError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button
+                    onClick={() => {
+                      setShowPasswordModal(false);
+                      setNewPassword("");
+                      setConfirmPassword("");
+                      setPasswordError("");
+                      setShowSetPasswordMode(false);
+                    }}
+                    className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all"
+                    style={{
+                      background: 'var(--clay-bg-tertiary)',
+                      color: 'var(--clay-text-primary)'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSetPassword}
+                    disabled={!newPassword || !confirmPassword}
+                    className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary"
+                  >
+                    Set Password
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

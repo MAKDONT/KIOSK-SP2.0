@@ -18,6 +18,7 @@ export default function StudentTracking() {
   const [error, setError] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
+  const [cancelledSuccessfully, setCancelledSuccessfully] = useState(false);
 
   useEffect(() => {
     fetchStatus();
@@ -28,11 +29,21 @@ export default function StudentTracking() {
   const fetchStatus = async () => {
     try {
       const res = await fetch(`/api/queue/${id}`);
-      if (!res.ok) {
-        throw new Error("Consultation not found");
+      
+      // If 404, the consultation was deleted (likely by cancellation)
+      if (res.status === 404) {
+        setConsultation(null);
+        setError("");
+        return;
       }
+      
+      if (!res.ok) {
+        throw new Error("Failed to fetch consultation status");
+      }
+      
       const data = await res.json();
       setConsultation(data);
+      setError(""); // Clear any previous errors
     } catch (err: any) {
       setError(err.message);
     }
@@ -41,7 +52,7 @@ export default function StudentTracking() {
   const handleCancel = async () => {
     if (!id || !consultation) return;
     
-    const confirmed = window.confirm("Are you sure you want to cancel your consultation? This action cannot be undone.");
+    const confirmed = window.confirm("Are you sure you want to cancel your consultation? Your time slot will be released and made available to other students.\n\nThis action cannot be undone.");
     if (!confirmed) return;
 
     setCancelling(true);
@@ -59,7 +70,9 @@ export default function StudentTracking() {
         throw new Error(data.error || "Failed to cancel consultation");
       }
 
-      setConsultation({ ...consultation, status: "cancelled" });
+      // Queue entry is now deleted successfully
+      setConsultation(null);
+      setCancelledSuccessfully(true);
     } catch (err: any) {
       setCancelError(err.message || "Failed to cancel consultation");
     } finally {
@@ -85,6 +98,32 @@ export default function StudentTracking() {
             className="w-full py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-medium rounded-xl transition-colors"
           >
             Go Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show success message after cancellation
+  if (cancelledSuccessfully) {
+    return (
+      <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4 sm:p-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-md w-full text-center space-y-4">
+          <div className="relative mb-4">
+            <div className="absolute inset-0 bg-emerald-400 rounded-full blur-xl opacity-30" />
+            <div className="bg-emerald-50 p-4 rounded-full relative mx-auto w-fit">
+              <CheckCircle className="w-12 h-12 text-emerald-600" />
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold text-neutral-900">Cancelled Successfully</h1>
+          <p className="text-neutral-600">
+            Your consultation has been cancelled and your time slot is now available for other students.
+          </p>
+          <button
+            onClick={() => navigate("/")}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl transition-colors"
+          >
+            Return to Home
           </button>
         </div>
       </div>

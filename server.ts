@@ -2771,20 +2771,22 @@ async function startServer() {
   });
 
   // Admin: Delete faculty (requires admin authentication + password confirmation)
-  app.delete("/api/faculty/:id", async (req, res) => {
+  app.delete("/api/faculty/:id", requireAdminAuth, async (req, res) => {
     try {
-      // Fetch admin email for logging
-      const { data: adminEmailRow } = await getSupabase()
-        .from("admin_settings")
-        .select("value")
-        .eq("key", "admin_email")
-        .maybeSingle();
-      const adminEmail = adminEmailRow?.value || null;
+      const facultyId = req.params.id;
+      console.log(`[DELETE-FACULTY] Processing deletion request for faculty: ${facultyId}`);
+
+      // Validate faculty ID format
+      if (!facultyId || facultyId.length > 100) {
+        console.warn(`[DELETE-FACULTY] Invalid faculty ID: ${facultyId}`);
+        return res.status(400).json({ error: "Invalid faculty ID" });
+      }
 
       // Require password for faculty deletion
       const passwordInput = typeof req.body?.password === "string" ? req.body.password : "";
       
       if (!passwordInput) {
+        console.warn(`[DELETE-FACULTY] No password provided for faculty ${facultyId}`);
         return res.status(400).json({ error: "Password is required to confirm faculty deletion" });
       }
 
@@ -2795,38 +2797,110 @@ async function startServer() {
         .eq("key", "admin_password")
         .maybeSingle();
 
-      if (fetchError) throw fetchError;
+      if (fetchError) {
+        console.error(`[DELETE-FACULTY] Error fetching admin password: ${fetchError.message}`);
+        throw new Error("Failed to verify admin password");
+      }
 
       const storedPassword = storedData?.value;
       if (!storedPassword) {
+        console.error(`[DELETE-FACULTY] No admin password configured`);
         return res.status(500).json({ error: "Admin password not configured" });
       }
 
       // Verify password
       if (!verifyPassword(passwordInput, storedPassword)) {
-        await logAudit("faculty_deletion_failed", { faculty_id: req.params.id, reason: "invalid_password", ip: req.ip }, req);
+        console.warn(`[DELETE-FACULTY] Invalid password for deletion of faculty ${facultyId}`);
+        await logAudit("faculty_deletion_failed", { faculty_id: facultyId, reason: "invalid_password", ip: req.ip }, req);
         return res.status(401).json({ error: "Invalid password" });
       }
 
-      // Proceed with deletion
-      const { data: facultyToDelete } = await getSupabase()
+      // Fetch faculty to delete (verify it exists and get details for logging)
+      console.log(`[DELETE-FACULTY] Fetching faculty details for ${facultyId}`);
+      const { data: facultyToDelete, error: fetchFacultyError } = await getSupabase()
         .from("faculty")
         .select("*")
-        .eq("id", req.params.id)
-        .single();
-      
-      const { error } = await getSupabase()
+        .eq("id", facultyId)
+        .maybeSingle();
+
+      if (fetchFacultyError) {
+        console.error(`[DELETE-FACULTY] Error fetching faculty: ${fetchFacultyError.message}`);
+        throw new Error("Failed to fetch faculty details");
+      }
+
+      if (!facultyToDelete) {
+        console.warn(`[DELETE-FACULTY] Faculty not found: ${facultyId}`);
+        return res.status(404).json({ error: "Faculty not found" });
+      }
+
+      console.log(`[DELETE-FACULTY] Checking for dependent records for faculty: ${facultyToDelete.name} (${facultyId})`);
+
+      // Check for dependent records before attempting deletion
+      const { data: queueEntries, error: queueError } = await getSupabase()
+        .from("queue")
+        .select("id, status, queue_date")
+        .eq("faculty_id", facultyId);
+
+      if (queueError) {
+        console.warn(`[DELETE-FACULTY] Error checking queue entries: ${queueError.message}`);
+      } else if (queueEntries && queueEntries.length > 0) {
+        console.warn(`[DELETE-FACULTY] Found ${queueEntries.length} queue entries for faculty ${facultyId}`);
+        const activeQueue = queueEntries.filter((q: any) => q.status !== 'completed' && q.status !== 'cancelled');
+        if (activeQueue.length > 0) {
+          await logAudit("faculty_deletion_failed", { faculty_id: facultyId, reason: "queue_entries_exist", count: queueEntries.length, ip: req.ip }, req);
+          return res.status(409).json({ 
+            error: `Cannot delete faculty: There are ${queueEntries.length} queue entries associated with this faculty. Please archive or delete queue entries first.`,
+            details: {
+              queue_count: queueEntries.length,
+              active_count: activeQueue.length,
+              instruction: "Delete all queue entries for this faculty before attempting deletion again."
+            }
+          });
+        }
+      }
+
+      console.log(`[DELETE-FACULTY] Deleting faculty: ${facultyToDelete.name} (${facultyId})`);
+
+      // Proceed with deletion
+      const { error: deleteError } = await getSupabase()
         .from("faculty")
         .delete()
-        .eq("id", req.params.id);
-      if (error) throw error;
-      await logAudit("faculty_deleted", { faculty_id: req.params.id }, req);
-      await logActivity("faculty_deleted", "faculty", req.params.id, adminEmail, "admin", { name: facultyToDelete?.name }, req);
-      broadcast("faculty_updated", { faculty_id: req.params.id });
+        .eq("id", facultyId);
+
+      if (deleteError) {
+        console.error(`[DELETE-FACULTY] Supabase error details:`, {
+          message: deleteError.message,
+          code: deleteError.code,
+          details: deleteError.details,
+          hint: deleteError.hint,
+          fullError: deleteError
+        });
+        
+        // Check if it's a foreign key constraint error
+        if (deleteError.code === '23503' || deleteError.message?.includes('foreign key')) {
+          throw new Error("Cannot delete faculty: faculty is referenced in other records (e.g., queue entries, consultations). Delete related records first.");
+        }
+        
+        throw new Error(`Database error: ${deleteError.message || 'Failed to delete faculty'}`);
+      }
+
+      // Fetch admin email for logging
+      const { data: adminEmailRow } = await getSupabase()
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "admin_email")
+        .maybeSingle();
+      const adminEmail = adminEmailRow?.value || null;
+
+      await logAudit("faculty_deleted", { faculty_id: facultyId }, req);
+      await logActivity("faculty_deleted", "faculty", facultyId, adminEmail, "admin", { name: facultyToDelete?.name }, req);
+      broadcast("faculty_updated", { faculty_id: facultyId });
+
+      console.log(`[DELETE-FACULTY] Successfully deleted faculty: ${facultyId}`);
       res.json({ success: true });
     } catch (err: any) {
-      console.error("Faculty deletion error:", err);
-      res.status(500).json({ error: "Internal server error" });
+      console.error(`[DELETE-FACULTY] Error: ${err.message}`);
+      res.status(500).json({ error: err.message || "Failed to delete faculty" });
     }
   });
 
@@ -3267,24 +3341,340 @@ async function startServer() {
   });
 
   // Get student by ID (for Kiosk scan)
-  app.get("/api/students/:id", async (req, res) => {
+  // Debug endpoint to test student lookup (TEMPORARY - for troubleshooting only)
+  app.get("/api/students/debug/test-lookup/:id", async (req, res) => {
     try {
+      const lookupValue = req.params.id;
+      console.log(`🔧 DEBUG: Testing lookup for: "${lookupValue}"`);
+      
+      // Try exact match on student_number
+      const { data: exact } = await getSupabase()
+        .from("students")
+        .select("*")
+        .eq("student_number", lookupValue)
+        .maybeSingle();
+      
+      if (exact) {
+        return res.json({ found: true, method: "exact_student_number", data: exact });
+      }
+      
+      // Try exact match on email
+      const { data: emailExact } = await getSupabase()
+        .from("students")
+        .select("*")
+        .eq("email", lookupValue)
+        .maybeSingle();
+      
+      if (emailExact) {
+        return res.json({ found: true, method: "exact_email", data: emailExact });
+      }
+      
+      // Get all students for comparison
+      const { data: all } = await getSupabase()
+        .from("students")
+        .select("student_number, email, full_name");
+      
+      const results = {
+        found: false,
+        search_value: lookupValue,
+        all_students: all || [],
+        potential_matches: (all || []).filter((s: any) => 
+          s.student_number?.includes(lookupValue) || 
+          lookupValue.includes(s.student_number) ||
+          s.email?.includes(lookupValue) ||
+          lookupValue.includes(s.email)
+        )
+      };
+      
+      res.json(results);
+    } catch (err: any) {
+      console.error("Debug test error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Debug endpoint to view all queue records
+  app.get("/api/queue/debug/list", async (req, res) => {
+    try {
+      console.log(`🔧 DEBUG: Fetching all queue records...`);
+      const { data, error } = await getSupabase()
+        .from("queue")
+        .select("*")
+        .order("created_at", { ascending: false });
+      
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+      
+      console.log(`📊 Found ${data?.length || 0} queue records in database`);
+      
+      // Return raw data for debugging
+      const formatted = data?.map((q: any) => ({
+        id: q.id,
+        student_id: q.student_id,
+        faculty_id: q.faculty_id,
+        status: q.status,
+        queue_date: q.queue_date,
+        time_period: q.time_period,
+        created_at: q.created_at
+      })) || [];
+      
+      res.json({
+        total: formatted.length,
+        queue_records: formatted
+      });
+    } catch (err: any) {
+      console.error("Debug queue list error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Debug endpoint to view all students (TEMPORARY - for troubleshooting only)
+  app.get("/api/students/debug/list", async (req, res) => {
+    try {
+      console.log(`🔧 DEBUG: Fetching all students...`);
       const { data, error } = await getSupabase()
         .from("students")
         .select("*")
-        .eq("student_number", req.params.id)
-        .single();
-      if (error || !data) {
-        res.status(404).json({ error: "Student not found" });
-      } else {
-        res.json({
-          id: data.student_number,
-          name: data.full_name,
-          email: data.email
-        });
+        .order("created_at", { ascending: false });
+      
+      if (error) {
+        return res.status(500).json({ error: error.message });
       }
+      
+      console.log(`📊 Found ${data?.length || 0} students in database`);
+      
+      // Return raw data for debugging
+      const formatted = data?.map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        email: s.email,
+        student_number: s.student_number,
+        full_name: s.full_name,
+        password: s.password ? `[${s.password.length} chars]` : null,
+        all_fields: Object.keys(s)
+      })) || [];
+      
+      res.json({
+        total: formatted.length,
+        students: formatted
+      });
     } catch (err: any) {
+      console.error("Debug list error:", err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/students/:id", async (req, res) => {
+    try {
+      const lookupValue = req.params.id;
+      console.log(`🔍 GET /api/students/:id - Looking up student by student_number: "${lookupValue}"`);
+      
+      const { data, error } = await getSupabase()
+        .from("students")
+        .select("*")
+        .eq("student_number", lookupValue)
+        .maybeSingle();
+      
+      if (error) {
+        console.error(`❌ Lookup error for "${lookupValue}":`, error);
+        return res.status(500).json({ error: "Database error: " + error.message });
+      }
+      
+      if (!data) {
+        console.log(`❌ No student found with student_number: "${lookupValue}"`);
+        console.log(`   Length: ${lookupValue.length}, Type: ${typeof lookupValue}`);
+        
+        // Fallback 1: Try looking up by email
+        console.log(`🔄 Fallback 1: Trying email lookup...`);
+        const { data: emailData } = await getSupabase()
+          .from("students")
+          .select("*")
+          .eq("email", lookupValue)
+          .maybeSingle();
+        
+        if (emailData) {
+          console.log(`✅ Found by email! ID=${emailData.id}`);
+          return res.json({
+            id: emailData.id,
+            name: emailData.full_name,
+            email: emailData.email,
+            password: emailData.password || ""
+          });
+        }
+        
+        // Fallback 2: Try case-insensitive search
+        console.log(`🔄 Fallback 2: Trying case-insensitive student_number search...`);
+        const { data: allForCaseInsensitive } = await getSupabase()
+          .from("students")
+          .select("*");
+        
+        const caseInsensitiveMatch = allForCaseInsensitive?.find((s: any) => 
+          s.student_number && s.student_number.toLowerCase() === lookupValue.toLowerCase()
+        );
+        
+        if (caseInsensitiveMatch) {
+          console.log(`✅ Found with case-insensitive match! ID=${caseInsensitiveMatch.id}, student_number="${caseInsensitiveMatch.student_number}"`);
+          return res.json({
+            id: caseInsensitiveMatch.id,
+            name: caseInsensitiveMatch.full_name,
+            email: caseInsensitiveMatch.email,
+            password: caseInsensitiveMatch.password || ""
+          });
+        }
+        
+        // Fallback 3: Try substring/contains search
+        console.log(`🔄 Fallback 3: Trying substring search...`);
+        const substringMatch = allForCaseInsensitive?.find((s: any) => 
+          s.student_number && (
+            s.student_number.includes(lookupValue) || 
+            lookupValue.includes(s.student_number) ||
+            s.email.includes(lookupValue) ||
+            lookupValue.includes(s.email)
+          )
+        );
+        
+        if (substringMatch) {
+          console.log(`✅ Found with substring match! ID=${substringMatch.id}, student_number="${substringMatch.student_number}"`);
+          return res.json({
+            id: substringMatch.id,
+            name: substringMatch.full_name,
+            email: substringMatch.email,
+            password: substringMatch.password || ""
+          });
+        }
+        
+        // Debug: Show all students for troubleshooting
+        console.log(`\n❌ NO MATCH FOUND. Showing ALL students in database for debugging:`);
+        if (allForCaseInsensitive && allForCaseInsensitive.length > 0) {
+          allForCaseInsensitive.forEach((s: any, idx: number) => {
+            const match_num = s.student_number === lookupValue ? " ✓ EXACT MATCH" : "";
+            const match_num_ci = s.student_number?.toLowerCase() === lookupValue.toLowerCase() ? " ✓ CASE-INSENSITIVE MATCH" : "";
+            const match_email = s.email === lookupValue ? " ✓ EMAIL EXACT MATCH" : "";
+            console.log(`   [${idx}] student_number="${s.student_number}" | email="${s.email}" | name="${s.full_name}" | id="${s.id}"${match_num}${match_num_ci}${match_email}`);
+          });
+        } else {
+          console.log(`   (Database is empty!)`);
+        }
+        
+        console.log(`\nSearched for: "${lookupValue}" (length: ${lookupValue.length})\n`);
+        return res.status(404).json({ error: "Student not found" });
+      }
+      
+      console.log(`✅ Found student: ID=${data.id}, student_number="${data.student_number}", name="${data.full_name}", email="${data.email}"`);
+      res.json({
+        id: data.id,
+        name: data.full_name,
+        email: data.email,
+        password: data.password || ""
+      });
+    } catch (err: any) {
+      console.error("Student fetch error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Register Student
+  app.post("/api/students/register", async (req, res) => {
+    try {
+      const { student_number, full_name, email, course, password } = req.body;
+
+      console.log(`📝 Student registration attempt: student_number="${student_number}", email="${email}"`);
+
+      // Validate required fields
+      if (!student_number || !full_name || !email) {
+        return res.status(400).json({ error: "Student number, name, and email are required" });
+      }
+
+      // Check if student already exists by student_number OR email
+      const { data: existingStudent, error: checkError } = await getSupabase()
+        .from("students")
+        .select("*")
+        .or(`student_number.eq.${student_number},email.eq.${email}`)
+        .maybeSingle();
+
+      if (checkError) {
+        console.error("Student check error:", checkError);
+      }
+
+      let student;
+
+      if (existingStudent) {
+        // Student already exists - just return their data
+        console.log(`✅ Student already exists: ${existingStudent.id}`);
+        res.json({
+          id: existingStudent.id,
+          student_number: existingStudent.student_number,
+          name: existingStudent.full_name,
+          email: existingStudent.email
+        });
+        return;
+      }
+
+      // Create new student
+      console.log(`➕ Creating new student: ${student_number}`);
+      const { data: newStudent, error: createError } = await getSupabase()
+        .from("students")
+        .insert({
+          student_number,
+          full_name,
+          email,
+          password: password ? password.trim() : null,
+          password_created_at: password ? new Date().toISOString() : null,
+          password_last_changed_at: password ? new Date().toISOString() : null
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error("Create student error:", createError);
+        return res.status(500).json({ error: createError.message || "Failed to create student record" });
+      }
+
+      // Return student data
+      console.log(`✅ Student created successfully: ID=${newStudent.id}, student_number=${newStudent.student_number}`);
+      res.json({
+        id: newStudent.id,
+        student_number: newStudent.student_number,
+        name: newStudent.full_name,
+        email: newStudent.email
+      });
+    } catch (err: any) {
+      console.error("Student registration error:", err);
+      res.status(500).json({ error: err.message || "Registration failed" });
+    }
+  });
+
+  // Set/Update Student Password
+  app.post("/api/students/:id/password", async (req, res) => {
+    try {
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ error: "Password is required" });
+      }
+
+      const trimmedPassword = password.trim();
+      console.log(`🔐 Setting password for student ${req.params.id}: "${trimmedPassword}" (length: ${trimmedPassword.length})`);
+
+      const { data, error } = await getSupabase()
+        .from("students")
+        .update({
+          password: trimmedPassword,
+          password_last_changed_at: new Date().toISOString()
+        })
+        .eq("id", req.params.id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Update password error:", error);
+        return res.status(500).json({ error: error.message || "Failed to set password" });
+      }
+
+      res.json({ success: true, message: "Password updated successfully" });
+    } catch (err: any) {
+      console.error("Set password error:", err);
+      res.status(500).json({ error: err.message || "Failed to set password" });
     }
   });
 
@@ -3307,11 +3697,12 @@ async function startServer() {
         validateOptionalString(req.body?.purpose, "purpose");
         validateOptionalString(req.body?.source, "source");
         validateOptionalString(req.body?.time_period, "time_period");
+        validateOptionalString(req.body?.student_password, "student_password", 255);
       } catch (validationErr: any) {
         return res.status(400).json({ error: validationErr.message });
       }
 
-      const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period, queue_date: requestedQueueDate } = req.body;
+      const { student_id, faculty_id, source, student_name, student_email, course, purpose, time_period, queue_date: requestedQueueDate, student_password } = req.body;
       const todayString = getCurrentAppDate();
       const queueDateToUse =
         typeof requestedQueueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(requestedQueueDate.trim())
@@ -3444,22 +3835,73 @@ async function startServer() {
       }
 
       // Check if student exists
-      let { data: student } = await getSupabase()
-        .from("students")
-        .select("*")
-        .eq("student_number", student_id)
-        .single();
+      // First try to look up by UUID (if student_id is a UUID), then by student_number
+      let student;
+      let lookupError = null;
+      
+      // Simple UUID regex check
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(student_id);
+      
+      console.log(`🔎 Student lookup: student_id="${student_id}", isUUID=${isUUID}`);
+      
+      if (isUUID) {
+        // Look up by UUID (id column)
+        const { data: studentByUUID, error: uuidError } = await getSupabase()
+          .from("students")
+          .select("*")
+          .eq("id", student_id)
+          .maybeSingle();
+        
+        if (uuidError) {
+          console.error("UUID lookup error:", uuidError);
+          lookupError = uuidError;
+        }
+        student = studentByUUID;
+        if (student) {
+          console.log(`✅ Found student by UUID: ${student.id}`);
+        }
+      }
+      
+      // If not found by UUID, try by student_number
+      if (!student) {
+        console.log(`🔎 Trying lookup by student_number: "${student_id}"`);
+        const { data: studentByNumber, error: numberError } = await getSupabase()
+          .from("students")
+          .select("*")
+          .eq("student_number", student_id)
+          .maybeSingle();
+        
+        if (numberError) {
+          console.error("Student number lookup error:", numberError);
+          lookupError = numberError;
+        }
+        student = studentByNumber;
+        if (student) {
+          console.log(`✅ Found student by student_number: ${student.id}`);
+        } else {
+          console.log(`❌ Student not found by any lookup method`);
+        }
+      }
 
       if (!student) {
         if (student_name) {
           // Create student
+          const updateData: any = { 
+            student_number: student_id, 
+            full_name: student_name, 
+            email: student_email || null
+          };
+
+          // Store password if provided (plain text)
+          if (student_password) {
+            updateData.password = student_password.trim();
+            updateData.password_created_at = new Date().toISOString();
+            updateData.password_last_changed_at = new Date().toISOString();
+          }
+
           const { data: newStudent, error: createError } = await getSupabase()
             .from("students")
-            .insert({ 
-              student_number: student_id, 
-              full_name: student_name, 
-              email: student_email || null
-            })
+            .insert(updateData)
             .select()
             .single();
           
@@ -3472,74 +3914,109 @@ async function startServer() {
           return res.status(404).json({ error: "Student not found. Please use Manual Input to register." });
         }
       } else if (student_email && student.email !== student_email) {
-        // Update existing student's email/course if provided and different
+        // Update existing student's email if provided and different
+        const updateData: any = { 
+          email: student_email || student.email
+        };
+
+        // Update password if provided (plain text)
+        if (student_password) {
+          updateData.password = student_password.trim();
+          updateData.password_last_changed_at = new Date().toISOString();
+        }
+
         await getSupabase()
           .from("students")
-          .update({ 
-            email: student_email || student.email
-          })
+          .update(updateData)
           .eq("id", student.id);
       }
 
       // Check if already in queue
-      const { data: existing } = await getSupabase()
+      const { data: existing, error: queueCheckError } = await getSupabase()
         .from("queue")
         .select("*")
         .eq("student_id", student.id)
         .in("status", ["waiting", "serving", "ongoing"])
         .maybeSingle();
+      
+      if (queueCheckError) {
+        console.error("Queue check error:", queueCheckError);
+      }
 
       if (existing) {
-        return res.status(400).json({ error: "Student already in queue" });
+        console.log(`⚠️ Student ${student.id} already in queue with ID ${existing.id}, status: ${existing.status}`);
+        return res.status(400).json({ error: "Student already in queue. Please complete or cancel your current consultation first." });
       }
 
       // Check if faculty already has a consultation at the same time slot
+      // TROUBLESHOOTING: If you still get "already scheduled" errors for empty time slots,
+      // check the server logs below for detailed debugging info. Old test data might need cleanup:
+      // SELECT * FROM queue WHERE faculty_id = '<faculty_id>' AND queue_date = '<date>' AND status NOT IN ('completed', 'cancelled');
+      
       if (faculty_id && time_period) {
-        console.log(`🔍 Checking double-booking: Faculty ${faculty_id}, Date: ${queueDateToUse}, Time: ${time_period}`);
+        console.log(`🔍 Checking double-booking: Faculty ${faculty_id}, Date: ${queueDateToUse}, Time: "${time_period}", CurrentStudent: ${student.id}`);
         
-        // Fetch all active consultations for this faculty today
+        // First, fetch ALL consultations to see what's there
+        const { data: allConsultationsDebug } = await getSupabase()
+          .from("queue")
+          .select("id, student_id, faculty_id, time_period, status, queue_date")
+          .eq("faculty_id", faculty_id)
+          .eq("queue_date", queueDateToUse);
+        
+        console.log(`📊 ALL consultations for faculty ${faculty_id} on ${queueDateToUse}:`);
+        if (allConsultationsDebug && allConsultationsDebug.length > 0) {
+          allConsultationsDebug.forEach((c: any) => {
+            const isCurrentStudent = c.student_id === student.id;
+            const isActive = ["waiting", "serving", "ongoing"].includes((c.status || "").toLowerCase());
+            console.log(`   - Queue: ${c.id}, Student: ${c.student_id} ${isCurrentStudent ? '(CURRENT)' : ''}, Status: "${c.status}" (active=${isActive}), Time: "${c.time_period}"`);
+          });
+        } else {
+          console.log(`   (No consultations found)`);
+        }
+        
+        // Now fetch EXCLUDING current student AND only active statuses
+        // Try multiple status values in case there's case sensitivity or variation
         const { data: allConsultations, error: consultationError } = await getSupabase()
           .from("queue")
           .select("*")
           .eq("faculty_id", faculty_id)
           .eq("queue_date", queueDateToUse)
-          .in("status", ["waiting", "serving", "ongoing"]);
+          .in("status", ["waiting", "serving", "ongoing", "WAITING", "SERVING", "ONGOING"])
+          .neq("student_id", student.id)
+          .not("time_period", "is", null); // Only consider consultations with a time_period
 
         if (consultationError) {
           console.error("❌ Double-booking query error:", consultationError);
           throw consultationError;
         }
 
-        console.log(`📊 Found ${allConsultations?.length || 0} existing consultations for this faculty`);
-
-        // Check if any existing consultation has the same time slot
+        console.log(`📊 Found ${allConsultations?.length || 0} OTHER active consultations (excluding current student, excluding NULL time_period)`);
+        
         if (allConsultations && allConsultations.length > 0) {
-          // First try direct column match
-          const hasDirectMatch = allConsultations.some((consultation: any) => {
-            return consultation.time_period === time_period;
+          console.log(`⚠️ Active consultations to check against:`);
+          allConsultations.forEach((c: any) => {
+            console.log(`   - Queue: ${c.id}, Student: ${c.student_id}, Status: "${c.status}", time_period="${c.time_period}"`);
+          });
+          
+          // Check if any existing consultation has the same time slot
+          const hasConflict = allConsultations.some((consultation: any) => {
+            const requestedTrimmed = (time_period || "").trim();
+            const existingTrimmed = (consultation.time_period || "").trim();
+            const match = requestedTrimmed && existingTrimmed && requestedTrimmed === existingTrimmed;
+            console.log(`   Compare: "${existingTrimmed}" === "${requestedTrimmed}" ? ${match}`);
+            return match;
           });
 
-          if (hasDirectMatch) {
-            console.warn(`⚠️ BLOCKED: Direct time_period match!`);
+          if (hasConflict) {
+            console.warn(`⚠️ BLOCKED: Found matching time_period!`);
             return res.status(400).json({ 
               error: `This faculty member already has a consultation scheduled at ${time_period}. Please select a different time slot or faculty member.` 
             });
           }
-
-          // Fallback: parse from meet_link
-          const hasTimeSlotConflict = allConsultations.some((consultation: any) => {
-            const parts = consultation.meet_link ? String(consultation.meet_link).split('|') : [];
-            const existingTimeSlot = parts.length > 0 ? parts[0] : null;
-            console.log(`  - Parsed time from meet_link: ${existingTimeSlot}`);
-            return existingTimeSlot === time_period;
-          });
-
-          if (hasTimeSlotConflict) {
-            console.warn(`⚠️ BLOCKED: Parsed time match!`);
-            return res.status(400).json({ 
-              error: `This faculty member already has a consultation scheduled at ${time_period}. Please select a different time slot or faculty member.` 
-            });
-          }
+          
+          console.log(`✅ No time slot conflicts found`);
+        } else {
+          console.log(`✅ No other active consultations - safe to proceed`);
         }
       }
 
@@ -3617,6 +4094,19 @@ async function startServer() {
 
         if (error) {
           const message = String(error.message || "").toLowerCase();
+          const code = (error as any).code;
+          
+          // Handle double-booking - unique constraint violation on (faculty_id, queue_date, time_period)
+          if (code === "23505" || message.includes("unique constraint") || message.includes("queue_faculty_date_timeslot")) {
+            const doubleBookingError = new Error(
+              `This faculty member already has a consultation scheduled at ${time_period || 'this time'}. ` +
+              `Please select a different time slot or faculty member.`
+            );
+            (doubleBookingError as any).statusCode = 400;
+            (doubleBookingError as any).isDoubleBooking = true;
+            throw doubleBookingError;
+          }
+          
           const missingPurposeColumn =
             options.allowPurpose &&
             message.includes("purpose") &&
@@ -3754,6 +4244,18 @@ async function startServer() {
       res.json(formatted);
     } catch (err: any) {
       console.error("Queue join error:", err);
+      
+      // Handle double-booking error
+      if ((err as any).isDoubleBooking) {
+        return res.status(400).json({ error: err.message });
+      }
+      
+      // Handle other known error cases
+      const errorMessage = String(err.message || "").toLowerCase();
+      if (errorMessage.includes("already in queue")) {
+        return res.status(400).json({ error: err.message });
+      }
+      
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -4379,6 +4881,50 @@ async function startServer() {
 
       if (updateError) throw updateError;
 
+      // Delete queue record if consultation is completed or cancelled
+      // Do this IMMEDIATELY after successful status update
+      let deleteAttempted = false;
+      let deleteSucceeded = false;
+      
+      if (status === "completed" || status === "cancelled") {
+        deleteAttempted = true;
+        console.log(`\n🗑️ [DELETE ATTEMPT] Deleting queue record: ${consultationId}`);
+        console.log(`   Status from frontend: "${status}"`);
+        console.log(`   DB Status: "${dbStatus}"`);
+        
+        const { data: beforeDelete, error: fetchBeforeError } = await getSupabase()
+          .from("queue")
+          .select("id, status")
+          .eq("id", consultationId)
+          .maybeSingle();
+        
+        console.log(`   Queue record exists: ${!!beforeDelete}, Status in DB: ${beforeDelete?.status}`);
+        
+        const { error: deleteError, count } = await getSupabase()
+          .from("queue")
+          .delete()
+          .eq("id", consultationId);
+        
+        if (deleteError) {
+          console.error(`❌ [DELETE FAILED] Queue record deletion failed: ${consultationId}`);
+          console.error(`   Error message: ${deleteError.message}`);
+          console.error(`   Error code: ${deleteError.code}`);
+          console.error(`   Error details:`, deleteError);
+        } else {
+          deleteSucceeded = true;
+          console.log(`✅ [DELETE SUCCESS] Queue record deleted: ${consultationId}`);
+          
+          // Verify deletion
+          const { data: afterDelete } = await getSupabase()
+            .from("queue")
+            .select("id")
+            .eq("id", consultationId)
+            .maybeSingle();
+          
+          console.log(`   Verification - Record still exists: ${!!afterDelete}`);
+        }
+      }
+
       // Extract meet link info for response
       const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
       const actual_link = parts.length > 1 ? parts[1] : (parts.length === 1 && parts[0]?.startsWith('http') ? parts[0] : null);
@@ -4458,8 +5004,9 @@ async function startServer() {
   app.put("/api/queue/:id/cancel", async (req, res) => {
     try {
       const { id } = req.params;
+      console.log(`[QUEUE-CANCEL] Processing cancellation for queue entry: ${id}`);
 
-      // Get the consultation to verify it exists
+      // Get the consultation to verify it exists and capture details for notification
       const { data: consultation, error: fetchError } = await getSupabase()
         .from("queue")
         .select("*")
@@ -4467,66 +5014,85 @@ async function startServer() {
         .single();
 
       if (fetchError || !consultation) {
+        console.warn(`[QUEUE-CANCEL] Queue entry not found: ${id}`);
         return res.status(404).json({ error: "Consultation not found" });
       }
 
       if (consultation.status === "cancelled") {
+        console.warn(`[QUEUE-CANCEL] Queue entry already cancelled: ${id}`);
         return res.status(400).json({ error: "Consultation is already cancelled" });
       }
 
+      // Only allow cancellation if waiting (not currently being served)
       if (consultation.status !== "waiting") {
-        return res.status(400).json({ error: "Can only cancel consultations that are waiting" });
+        console.warn(`[QUEUE-CANCEL] Cannot cancel queue entry with status '${consultation.status}': ${id}`);
+        return res.status(400).json({ error: "Can only cancel consultations that are waiting. Once serving has begun, contact faculty directly." });
       }
 
-      // Update status to cancelled
-      const { data: updated, error: updateError } = await getSupabase()
+      const facultyId = consultation.faculty_id;
+      const studentId = consultation.student_id;
+      const queueDate = consultation.queue_date;
+
+      console.log(`[QUEUE-CANCEL] Deleting queue entry for student ${studentId}, faculty ${facultyId}, date ${queueDate}`);
+
+      // DELETE the queue entry entirely so the slot becomes available
+      const { error: deleteError } = await getSupabase()
         .from("queue")
-        .update({ status: "cancelled" })
-        .eq("id", id)
-        .select()
-        .single();
+        .delete()
+        .eq("id", id);
 
-      if (updateError) {
-        throw updateError;
+      if (deleteError) {
+        console.error(`[QUEUE-CANCEL] Error deleting queue entry: ${deleteError.message}`);
+        throw deleteError;
       }
 
-      // Broadcast the update
-      broadcast("queue_updated", { faculty_id: consultation.faculty_id });
+      console.log(`[QUEUE-CANCEL] Successfully deleted queue entry ${id}. Slot now available.`);
+
+      // Broadcast the update so faculty and other students see the change
+      broadcast("queue_updated", { faculty_id: facultyId, date: queueDate });
 
       // Send notification email to student if email exists
       const { data: student } = await getSupabase()
         .from("students")
         .select("email, full_name")
-        .eq("id", consultation.student_id)
+        .eq("id", studentId)
         .single();
 
       if (student?.email) {
         const { data: faculty } = await getSupabase()
           .from("faculty")
           .select("name")
-          .eq("id", consultation.faculty_id)
+          .eq("id", facultyId)
           .single();
 
-        const studentName = student.full_name || consultation.student_name || "Student";
+        const studentName = student.full_name || consultation.student_email || "Student";
 
-        await sendEmailNotification(
-          student.email,
-          "Consultation Cancelled",
-          `
-          <h2>Consultation Cancelled</h2>
-          <p>Hi ${studentName},</p>
-          <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> has been cancelled.</p>
-          <p>If you wish to schedule another consultation, please visit the kiosk or web application.</p>
-          <br/>
-          <p>Best regards,<br/>Consultation System</p>
-          `
-        );
+        try {
+          await sendEmailNotification(
+            student.email,
+            "Consultation Cancelled",
+            `
+            <h2>Consultation Cancelled</h2>
+            <p>Hi ${studentName},</p>
+            <p>Your consultation with <strong>${faculty?.name || "faculty member"}</strong> on ${queueDate} has been cancelled and your slot has been released.</p>
+            <p>The time slot is now available for other students. If you wish to schedule another consultation, please visit the kiosk or web application.</p>
+            <br/>
+            <p>Best regards,<br/>Consultation System</p>
+            `
+          );
+        } catch (emailErr) {
+          console.warn(`[QUEUE-CANCEL] Failed to send cancellation email: ${emailErr}`);
+          // Don't fail the whole operation if email fails
+        }
       }
 
-      res.json({ message: "Consultation cancelled successfully", data: updated });
+      res.json({ 
+        message: "Consultation cancelled successfully and slot released for other students", 
+        cancelled_entry: { id, faculty_id: facultyId, student_id: studentId, queue_date: queueDate }
+      });
     } catch (err: any) {
       console.error("Error cancelling consultation:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message || "Failed to cancel consultation" });
     }
   });
 
@@ -6536,6 +7102,32 @@ async function startServer() {
         } else {
           console.log("✅ Queue entries cleaned");
         }
+
+        // Also delete any completed or cancelled entries from today
+        // (these should already be deleted when status is updated, but this ensures cleanup)
+        // Note: Frontend sends "completed"/"cancelled", but DB stores as "done"
+        const { data: doneEntries, error: fetchError } = await getSupabase()
+          .from("queue")
+          .select("id, status");
+
+        const completedRecords = doneEntries?.filter((e: any) => e.status === "done") || [];
+        
+        if (!fetchError && completedRecords.length > 0) {
+          console.log(`🧹 Found ${completedRecords.length} done/completed entries to clean up`);
+          
+          const { error: deleteError, count } = await getSupabase()
+            .from("queue")
+            .delete()
+            .eq("status", "done");
+
+          if (deleteError) {
+            console.error("❌ Error deleting done entries:", deleteError);
+          } else {
+            console.log(`✅ Deleted ${count} done/completed entries`);
+          }
+        } else {
+          console.log("✅ No completed/cancelled entries found to clean up");
+        }
         
         console.log("✅ Daily cleanup completed at", new Date().toISOString());
       } catch (err) {
@@ -7143,6 +7735,20 @@ async function startServer() {
                 console.error(`   ❌ Failed to update:`, updateError.message);
               } else {
                 console.log(`   ✅ Auto-removed from queue (no-show - time expired)`);
+
+                // Delete queue record since it's been cancelled
+                console.log(`   🗑️ Attempting to delete queue record: ${consultation.id}`);
+                const { error: deleteError, count } = await getSupabase()
+                  .from("queue")
+                  .delete()
+                  .eq("id", consultation.id);
+
+                if (deleteError) {
+                  console.error(`   ❌ Failed to delete queue record: ${consultation.id}`);
+                  console.error(`      Error: ${deleteError.message}`);
+                } else {
+                  console.log(`   ✅ Queue record deleted successfully (${count} records removed)`);
+                }
 
                 // Send email notification to student
                 if (studentEmail) {
