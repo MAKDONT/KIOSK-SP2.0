@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Clock, Video, CheckCircle, AlertCircle, RefreshCw, XCircle } from "lucide-react";
 
@@ -19,21 +19,53 @@ export default function StudentTracking() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
   const [cancelledSuccessfully, setCancelledSuccessfully] = useState(false);
-  const [completedSuccessfully, setCompletedSuccessfully] = useState(false);
+  const [shouldPoll, setShouldPoll] = useState(true);
+  const [consultationCompleted, setConsultationCompleted] = useState(false);
+  const [hasInitialized, setHasInitialized] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
 
   useEffect(() => {
+    if (!shouldPoll) return;
+    
     fetchStatus();
-    const interval = setInterval(fetchStatus, 3000); // Poll every 3 seconds
+    const interval = setInterval(() => {
+      // Only fetch if we should still be polling
+      if (shouldPoll) {
+        fetchStatus();
+      }
+    }, 3000); // Poll every 3 seconds
+    
     return () => clearInterval(interval);
-  }, [id, cancelledSuccessfully, completedSuccessfully]); // Re-run when consultation reaches final state
+  }, [id, shouldPoll]);
+
+  // Stop polling when consultation is completed or cancelled
+  useEffect(() => {
+    if (consultation?.status === "completed" || consultation?.status === "cancelled") {
+      setShouldPoll(false);
+    }
+  }, [consultation?.status]);
 
   const fetchStatus = async () => {
     try {
       const res = await fetch(`/api/queue/${id}`);
       
-      // If 404, the consultation was deleted (consultation ended)
+      // If 404, the consultation was deleted (likely by cancellation or completion)
+      // Stop polling in this case
       if (res.status === 404) {
-        setCompletedSuccessfully(true);
+        setShouldPoll(false);
+        setHasInitialized(true); // Mark that we've attempted initialization
+        // If we had loaded data before, it means the consultation completed
+        if (hasLoadedOnceRef.current) {
+          setConsultationCompleted(true);
+        } else {
+          // Even if we never loaded before, if we get a 404 after initializing,
+          // it could mean the record was deleted immediately (marked complete before we loaded)
+          // In this case, check if we're in a consultation context (id exists)
+          if (id) {
+            setConsultationCompleted(true);
+          }
+        }
+        setConsultation(null);
         setError("");
         return;
       }
@@ -45,12 +77,10 @@ export default function StudentTracking() {
       const data = await res.json();
       setConsultation(data);
       setError(""); // Clear any previous errors
-      
-      // If consultation status is completed, mark it and let it display the completion state
-      if (data.status === "completed" || data.status === "cancelled") {
-        setCompletedSuccessfully(true);
-      }
+      setHasInitialized(true); // Mark that we've successfully initialized
+      hasLoadedOnceRef.current = true; // Mark that we've successfully loaded data
     } catch (err: any) {
+      setHasInitialized(true); // Mark that we've attempted initialization
       setError(err.message);
     }
   };
@@ -84,6 +114,12 @@ export default function StudentTracking() {
     } finally {
       setCancelling(false);
     }
+  };
+
+  const normalizeMeetingLink = (value?: string | null) => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed) return "";
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   };
 
   if (error) {
@@ -130,8 +166,8 @@ export default function StudentTracking() {
     );
   }
 
-  // Show success message after consultation completes
-  if (completedSuccessfully && !consultation) {
+  // Show success message when consultation is completed
+  if (consultationCompleted) {
     return (
       <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4 sm:p-6">
         <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-md w-full text-center space-y-4">
@@ -141,9 +177,9 @@ export default function StudentTracking() {
               <CheckCircle className="w-12 h-12 text-indigo-600" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-neutral-900">Consultation Completed</h1>
+          <h1 className="text-2xl font-bold text-neutral-900">Completed</h1>
           <p className="text-neutral-600">
-            Your consultation has been completed. Thank you for using our service!
+            Your consultation has finished. Thank you!
           </p>
           <button
             onClick={() => navigate("/")}
@@ -156,7 +192,7 @@ export default function StudentTracking() {
     );
   }
 
-  if (!consultation) {
+  if (!consultation && !hasInitialized) {
     return (
       <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4">
         <div className="animate-spin text-emerald-600">
@@ -165,6 +201,21 @@ export default function StudentTracking() {
       </div>
     );
   }
+
+  // If we've initialized but have no consultation and consultation isn't marked as completed,
+  // something unexpected happened - show loading while we wait
+  if (!consultation && !consultationCompleted) {
+    return (
+      <div className="min-h-[100dvh] bg-neutral-100 flex items-center justify-center p-4">
+        <div className="animate-spin text-emerald-600">
+          <RefreshCw className="w-12 h-12" />
+        </div>
+      </div>
+    );
+  }
+
+  const activeMeetLink = normalizeMeetingLink(consultation.meet_link);
+  const isEmbeddedRoom = activeMeetLink.includes("meet.jit.si");
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-br from-indigo-50 via-white to-emerald-50 flex flex-col items-center justify-center p-4 sm:p-6">
@@ -211,10 +262,18 @@ export default function StudentTracking() {
                   <Video className="w-16 h-16 text-emerald-600" />
                 </div>
               </div>
-              <h2 className="text-3xl font-black text-emerald-600 mb-2">Session Started</h2>
-              <p className="text-emerald-700/80 text-center max-w-[300px]">
-                Your consultation is now active. Please check your email for the Google Meet link sent by your faculty.
+              <h2 className="text-3xl font-black text-emerald-600 mb-2">Session Ready</h2>
+              <p className="text-emerald-700/80 text-center mb-8 max-w-[250px]">
+                Your consultation is starting.
               </p>
+              <div className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:p-6 text-center space-y-4">
+                <p className="text-sm sm:text-base text-emerald-900">
+                  Please check your email for the meeting link. The Google Meet link has been sent to your email address.
+                </p>
+                <p className="text-xs sm:text-sm text-emerald-700">
+                  If you don't see the email, please check your spam/junk folder.
+                </p>
+              </div>
             </div>
           )}
 

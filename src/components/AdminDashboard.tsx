@@ -88,6 +88,7 @@ export default function AdminDashboard() {
   const [deleteFacultyModal, setDeleteFacultyModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
   const [deleteFacultyPassword, setDeleteFacultyPassword] = useState("");
   const [deleteFacultyPasswordError, setDeleteFacultyPasswordError] = useState("");
+  const [deleteFacultyLoading, setDeleteFacultyLoading] = useState(false);
   const [editDepartmentModal, setEditDepartmentModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: "", name: "" });
   const [editDepartmentNameInput, setEditDepartmentNameInput] = useState("");
   const [editDepartmentCollegeIdInput, setEditDepartmentCollegeIdInput] = useState("");
@@ -945,6 +946,7 @@ export default function AdminDashboard() {
       setDeleteFacultyPasswordError("Password is required to confirm deletion");
       return;
     }
+    setDeleteFacultyLoading(true);
     try {
       const res = await fetch(`/api/faculty/${deleteFacultyModal.id}`, {
         method: "DELETE",
@@ -974,6 +976,8 @@ export default function AdminDashboard() {
       alert("Faculty deleted successfully");
     } catch (err: any) {
       setDeleteFacultyPasswordError(err.message || "An error occurred while deleting faculty");
+    } finally {
+      setDeleteFacultyLoading(false);
     }
   };
 
@@ -2610,15 +2614,17 @@ export default function AdminDashboard() {
                   setDeleteFacultyPassword("");
                   setDeleteFacultyPasswordError("");
                 }}
-                className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
+                disabled={deleteFacultyLoading}
+                className="flex-1 py-3 px-4 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-200 text-neutral-700 font-bold rounded-xl transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteFaculty}
-                className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-colors"
+                disabled={deleteFacultyLoading}
+                className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-bold rounded-xl transition-colors"
               >
-                Delete
+                {deleteFacultyLoading ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>

@@ -215,16 +215,8 @@ export function useFaculties() {
     }
   }, [editFacultyPasswordModal.id, facultyPasswordInput, facultyPasswordConfirm, closeEditFacultyPasswordModal]);
 
-  const handleDeleteFaculty = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/faculty/${deleteFacultyModal.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete faculty");
-      await fetchFaculties();
-      setDeleteFacultyModal({ isOpen: false, id: "", name: "" });
-    } catch (err: any) {
-      alert(err.message);
-    }
-  }, [deleteFacultyModal.id, fetchFaculties]);
+  // NOTE: handleDeleteFaculty is now implemented in AdminDashboard.tsx with proper password handling
+  // This hook no longer handles deletion - use the AdminDashboard implementation instead
 
   return {
     faculties,
@@ -268,6 +260,5 @@ export function useFaculties() {
     handleSaveFacultyPassword,
     openEditFacultyPasswordModal,
     closeEditFacultyPasswordModal,
-    handleDeleteFaculty,
   };
 }

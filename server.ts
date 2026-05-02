@@ -2824,28 +2824,113 @@ async function startServer() {
 
       console.log(`[DELETE-FACULTY] Checking for dependent records for faculty: ${facultyToDelete.name} (${facultyId})`);
 
-      // Check for dependent records before attempting deletion
-      const { data: queueEntries, error: queueError } = await getSupabase()
-        .from("queue")
-        .select("id, status, queue_date")
+      // Delete all dependent records before deleting faculty
+      console.log(`[DELETE-FACULTY] Deleting dependent records for faculty: ${facultyId}`);
+
+      // Collect all errors from dependent record deletions
+      const deletionErrors: Array<{ table: string; error: string }> = [];
+
+      // 1. Delete telegram_notification_logs for this faculty
+      console.log(`[DELETE-FACULTY] Deleting telegram notification logs...`);
+      const { error: deleteLogsError } = await getSupabase()
+        .from("telegram_notification_logs")
+        .delete()
         .eq("faculty_id", facultyId);
 
-      if (queueError) {
-        console.warn(`[DELETE-FACULTY] Error checking queue entries: ${queueError.message}`);
-      } else if (queueEntries && queueEntries.length > 0) {
-        console.warn(`[DELETE-FACULTY] Found ${queueEntries.length} queue entries for faculty ${facultyId}`);
-        const activeQueue = queueEntries.filter((q: any) => q.status !== 'completed' && q.status !== 'cancelled');
-        if (activeQueue.length > 0) {
-          await logAudit("faculty_deletion_failed", { faculty_id: facultyId, reason: "queue_entries_exist", count: queueEntries.length, ip: req.ip }, req);
-          return res.status(409).json({ 
-            error: `Cannot delete faculty: There are ${queueEntries.length} queue entries associated with this faculty. Please archive or delete queue entries first.`,
-            details: {
-              queue_count: queueEntries.length,
-              active_count: activeQueue.length,
-              instruction: "Delete all queue entries for this faculty before attempting deletion again."
-            }
-          });
-        }
+      if (deleteLogsError) {
+        console.error(`[DELETE-FACULTY] ❌ ERROR deleting telegram logs: ${deleteLogsError.message}`);
+        deletionErrors.push({ table: "telegram_notification_logs", error: deleteLogsError.message });
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted telegram notification logs for faculty: ${facultyId}`);
+      }
+
+      // 2. Delete telegram_chats for this faculty
+      console.log(`[DELETE-FACULTY] Deleting telegram chats...`);
+      const { error: deleteChatsError } = await getSupabase()
+        .from("telegram_chats")
+        .delete()
+        .eq("faculty_id", facultyId);
+
+      if (deleteChatsError) {
+        console.error(`[DELETE-FACULTY] ❌ ERROR deleting telegram chats: ${deleteChatsError.message}`);
+        deletionErrors.push({ table: "telegram_chats", error: deleteChatsError.message });
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted telegram chats for faculty: ${facultyId}`);
+      }
+
+      // 3. Delete queue entries for this faculty
+      console.log(`[DELETE-FACULTY] Deleting queue entries...`);
+      const { error: deleteQueueError } = await getSupabase()
+        .from("queue")
+        .delete()
+        .eq("faculty_id", facultyId);
+
+      if (deleteQueueError) {
+        console.error(`[DELETE-FACULTY] ❌ ERROR deleting queue entries: ${deleteQueueError.message}`);
+        deletionErrors.push({ table: "queue", error: deleteQueueError.message });
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted queue entries for faculty: ${facultyId}`);
+      }
+
+      // 4. Delete system logs for this faculty
+      console.log(`[DELETE-FACULTY] Deleting system logs...`);
+      const { error: deleteSystemLogsError } = await getSupabase()
+        .from("system_logs")
+        .delete()
+        .eq("target_id", facultyId);
+
+      if (deleteSystemLogsError) {
+        console.error(`[DELETE-FACULTY] ❌ ERROR deleting system logs: ${deleteSystemLogsError.message}`);
+        deletionErrors.push({ table: "system_logs", error: deleteSystemLogsError.message });
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted system logs for faculty: ${facultyId}`);
+      }
+
+      // 5. Delete audit logs for this faculty
+      console.log(`[DELETE-FACULTY] Deleting audit logs...`);
+      const { error: deleteAuditLogsError } = await getSupabase()
+        .from("audit_logs")
+        .delete()
+        .eq("target_id", facultyId);
+
+      if (deleteAuditLogsError) {
+        console.warn(`[DELETE-FACULTY] ⚠️  WARNING deleting audit logs: ${deleteAuditLogsError.message}`);
+        // Audit logs deletion is non-critical, so just warn
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted audit logs for faculty: ${facultyId}`);
+      }
+
+      // 6. Delete email delivery logs for this faculty if stored
+      console.log(`[DELETE-FACULTY] Deleting email delivery logs...`);
+      const { error: deleteEmailError } = await getSupabase()
+        .from("email_delivery_logs")
+        .delete()
+        .eq("recipient_faculty_id", facultyId);
+
+      if (deleteEmailError && deleteEmailError.message.includes("does not exist")) {
+        console.log(`[DELETE-FACULTY] ℹ️  email_delivery_logs table doesn't exist (skipped)`);
+      } else if (deleteEmailError) {
+        console.warn(`[DELETE-FACULTY] ⚠️  WARNING deleting email logs: ${deleteEmailError.message}`);
+        // Email logs deletion is non-critical
+      } else {
+        console.log(`[DELETE-FACULTY] ✅ Deleted email delivery logs for faculty: ${facultyId}`);
+      }
+
+      // 7. Delete Google Auth data from memory
+      console.log(`[DELETE-FACULTY] Deleting Google auth data...`);
+      deleteFacultyGoogleAuthData(facultyId);
+      console.log(`[DELETE-FACULTY] ✅ Deleted Google auth data for faculty: ${facultyId}`);
+
+      // If there were critical deletion errors, return them to the user
+      if (deletionErrors.length > 0) {
+        console.error(`[DELETE-FACULTY] ❌ Cannot proceed with faculty deletion due to errors in dependent tables:`, deletionErrors);
+        return res.status(409).json({
+          error: "Cannot delete faculty: Failed to delete dependent records",
+          details: {
+            tables_with_errors: deletionErrors,
+            instruction: "Please try again or contact support if the error persists"
+          }
+        });
       }
 
       console.log(`[DELETE-FACULTY] Deleting faculty: ${facultyToDelete.name} (${facultyId})`);
@@ -2864,11 +2949,6 @@ async function startServer() {
           hint: deleteError.hint,
           fullError: deleteError
         });
-        
-        // Check if it's a foreign key constraint error
-        if (deleteError.code === '23503' || deleteError.message?.includes('foreign key')) {
-          throw new Error("Cannot delete faculty: faculty is referenced in other records (e.g., queue entries, consultations). Delete related records first.");
-        }
         
         throw new Error(`Database error: ${deleteError.message || 'Failed to delete faculty'}`);
       }
