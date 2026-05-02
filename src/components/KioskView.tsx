@@ -444,7 +444,7 @@ export default function KioskView() {
               Select Faculty & Book Appointment
             </h2>
             <p className="text-sm sm:text-base mt-2" style={{ color: 'var(--clay-text-secondary)' }}>
-              View faculty availability for the entire week (Sun-Sat) and book your consultation in advance
+              
             </p>
           </div>
           

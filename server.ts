@@ -213,21 +213,10 @@ const hasAvailableSlots = (availabilitySlots: any[]): boolean => {
   const today = getDateInTimezone(todayUTC);
   const todayDay = getDayOfWeekInTimezone(todayUTC);
 
-  // Find next Monday
-  let daysUntilMonday = 0;
-
-  if (todayDay === 0) {
-    daysUntilMonday = 1;
-  } else if (todayDay === 1) {
-    daysUntilMonday = 7;
-  } else {
-    daysUntilMonday = 8 - todayDay;
-  }
-
-  // Check next 5 days (Mon-Fri)
-  for (let i = 0; i < 5; i++) {
+  // Check next 7 days (all days of the week)
+  for (let i = 0; i < 7; i++) {
     const date = new Date(today);
-    date.setDate(date.getDate() + daysUntilMonday + i);
+    date.setDate(date.getDate() + i);
     const day = daysOfWeek[getDayOfWeekInTimezone(date)];
 
     // Check if this day has scheduled slots
