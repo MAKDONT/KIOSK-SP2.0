@@ -3747,6 +3747,160 @@ async function startServer() {
     }
   });
 
+  // Forgot Password - Request Password Reset Token
+  app.post("/api/students/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      console.log(`🔐 Password reset requested for email: ${normalizedEmail}`);
+
+      // Find student by email
+      const { data: student, error: findError } = await getSupabase()
+        .from("students")
+        .select("id, full_name, email")
+        .eq("email", normalizedEmail)
+        .single();
+
+      if (findError || !student) {
+        console.log(`⚠️ Password reset requested for non-existent email: ${normalizedEmail}`);
+        // Return success even if email not found (security best practice)
+        return res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent." });
+      }
+
+      // Generate reset token
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetTokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
+      const resetTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+
+      // Store token hash and expiration in database
+      const { error: updateError } = await getSupabase()
+        .from("students")
+        .update({
+          password_reset_token: resetTokenHash,
+          password_reset_expires_at: resetTokenExpiresAt
+        })
+        .eq("id", student.id);
+
+      if (updateError) {
+        console.error("Failed to store reset token:", updateError);
+        return res.status(500).json({ error: "Failed to generate reset token" });
+      }
+
+      // Generate reset link
+      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(student.email)}`;
+
+      // Send email with reset link
+      const emailSubject = "Password Reset Request - Student Consultation System";
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background: linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%); padding: 30px; border-radius: 15px; margin-bottom: 20px;">
+            <h1 style="color: #333; margin: 0; text-align: center;">Password Reset Request</h1>
+          </div>
+          
+          <div style="background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+            <p style="color: #666; margin-bottom: 15px;">Hi ${student.full_name},</p>
+            <p style="color: #666; margin-bottom: 15px;">You requested a password reset for your Student Consultation System account.</p>
+            <p style="color: #666; margin-bottom: 15px;">Click the button below to reset your password. This link will expire in 24 hours.</p>
+            
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${resetLink}" style="display: inline-block; background: linear-gradient(135deg, #d4a574 0%, #c9945f 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Reset Password</a>
+            </div>
+            
+            <p style="color: #999; font-size: 13px; margin-bottom: 10px;">Or copy this link:</p>
+            <p style="color: #0066cc; font-size: 12px; word-break: break-all; background: #f0f0f0; padding: 10px; border-radius: 5px;">${resetLink}</p>
+          </div>
+          
+          <div style="background: #fff3cd; padding: 15px; border-radius: 10px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
+            <p style="color: #856404; margin: 0; font-size: 14px;">If you did not request this password reset, please ignore this email or contact support immediately.</p>
+          </div>
+          
+          <div style="text-align: center; color: #999; font-size: 12px; margin-top: 20px;">
+            <p>Student Consultation System</p>
+            <p>This is an automated email. Please do not reply to this email.</p>
+          </div>
+        </div>
+      `;
+
+      await sendEmailNotification(student.email, emailSubject, emailHtml);
+
+      console.log(`✅ Password reset email sent to: ${student.email}`);
+      res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent." });
+    } catch (err: any) {
+      console.error("Forgot password error:", err);
+      res.status(500).json({ error: err.message || "Failed to process password reset request" });
+    }
+  });
+
+  // Reset Password - Verify Token and Update Password
+  app.post("/api/students/reset-password/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const { password, email } = req.body;
+
+      if (!token || !password || !email) {
+        return res.status(400).json({ error: "Token, password, and email are required" });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const trimmedPassword = password.trim();
+
+      if (trimmedPassword.length < 4) {
+        return res.status(400).json({ error: "Password must be at least 4 characters long" });
+      }
+
+      console.log(`🔐 Processing password reset for: ${normalizedEmail}`);
+
+      // Hash the provided token
+      const resetTokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+      // Find student with matching token
+      const { data: student, error: findError } = await getSupabase()
+        .from("students")
+        .select("id, password_reset_token, password_reset_expires_at")
+        .eq("email", normalizedEmail)
+        .eq("password_reset_token", resetTokenHash)
+        .single();
+
+      if (findError || !student) {
+        console.error(`❌ Invalid or expired reset token for: ${normalizedEmail}`);
+        return res.status(400).json({ error: "Invalid or expired password reset link" });
+      }
+
+      // Check if token has expired
+      if (new Date(student.password_reset_expires_at) < new Date()) {
+        console.error(`❌ Reset token expired for: ${normalizedEmail}`);
+        return res.status(400).json({ error: "Password reset link has expired. Please request a new one." });
+      }
+
+      // Update password and clear reset token
+      const { error: updateError } = await getSupabase()
+        .from("students")
+        .update({
+          password: trimmedPassword,
+          password_last_changed_at: new Date().toISOString(),
+          password_reset_token: null,
+          password_reset_expires_at: null
+        })
+        .eq("id", student.id);
+
+      if (updateError) {
+        console.error("Failed to update password:", updateError);
+        return res.status(500).json({ error: "Failed to update password" });
+      }
+
+      console.log(`✅ Password successfully reset for: ${normalizedEmail}`);
+      res.json({ success: true, message: "Password has been successfully reset. You can now log in with your new password." });
+    } catch (err: any) {
+      console.error("Reset password error:", err);
+      res.status(500).json({ error: err.message || "Failed to reset password" });
+    }
+  });
+
   // Join Queue
   app.post("/api/queue/join", async (req, res) => {
     try {

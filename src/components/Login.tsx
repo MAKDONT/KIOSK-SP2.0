@@ -986,6 +986,8 @@ export default function Login() {
         )}
       </div>
       </div>
+
+      {/* Forgot Password Modal */}
     </div>
   );
 }

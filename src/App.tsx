@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import KioskView from "./components/KioskView";
 import Login from "./components/Login";
+import ResetPassword from "./components/ResetPassword";
 import FacultyDashboard from "./components/FacultyDashboard";
 import StudentTracking from "./components/StudentTracking";
 import AdminDashboard from "./components/AdminDashboard";
@@ -14,6 +15,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Login />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/faculty/login" element={<StaffLogin />} />
           <Route path="/staff/login" element={<Navigate to="/faculty/login" replace />} />
           <Route path="/admin/login" element={<AdminLogin />} />

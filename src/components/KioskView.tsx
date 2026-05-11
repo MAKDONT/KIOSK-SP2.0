@@ -48,6 +48,14 @@ export default function KioskView() {
   const [showSetPasswordMode, setShowSetPasswordMode] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  
+  // Forgot Password State
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState(studentEmail);
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [forgotPasswordMessage, setForgotPasswordMessage] = useState("");
+  const [forgotPasswordError, setForgotPasswordError] = useState("");
+  
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -368,7 +376,45 @@ export default function KioskView() {
       setPasswordError(err.message || "Failed to set password");
     }
   };
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotPasswordEmail.trim()) {
+      setForgotPasswordError("Please enter your email address");
+      return;
+    }
 
+    setForgotPasswordLoading(true);
+    setForgotPasswordError("");
+    setForgotPasswordMessage("");
+
+    try {
+      const response = await fetch("/api/students/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotPasswordEmail.trim() })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setForgotPasswordError(data.error || "Failed to send password reset email");
+        return;
+      }
+
+      setForgotPasswordMessage("Password reset instructions have been sent to your email. Please check your inbox and follow the link to reset your password.");
+      
+      // Auto-close modal after 5 seconds
+      setTimeout(() => {
+        setShowForgotPasswordModal(false);
+        setForgotPasswordEmail(studentEmail);
+        setForgotPasswordMessage("");
+      }, 5000);
+    } catch (err: any) {
+      setForgotPasswordError(err.message || "Failed to send password reset email");
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
   const submitQueueJoin = async () => {
     setLoading(true);
     setError("");
@@ -742,9 +788,19 @@ export default function KioskView() {
                     autoFocus
                   />
                   {passwordError && (
-                    <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
-                      {passwordError}
-                    </p>
+                    <div className="space-y-4">
+                      <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
+                        {passwordError}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowForgotPasswordModal(true)}
+                        className="w-full py-2 px-4 text-lg font-semibold transition-colors hover:opacity-80"
+                        style={{ color: 'var(--clay-accent-warm)', cursor: 'pointer', background: 'transparent' }}
+                      >
+                        Forgot Password?
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -853,6 +909,81 @@ export default function KioskView() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Forgot Password Modal */}
+      {showForgotPasswordModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 sm:p-12 w-full max-w-md shadow-2xl" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
+            <div className="text-center space-y-6">
+              <h2 className="text-3xl sm:text-4xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
+                Reset Password
+              </h2>
+              <p className="text-lg" style={{ color: 'var(--clay-text-secondary)' }}>
+                Enter your email address and we'll send you a link to reset your password.
+              </p>
+            </div>
+
+            <form onSubmit={handleForgotPassword} className="space-y-6 mt-8">
+              <input
+                type="email"
+                value={forgotPasswordEmail}
+                onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                placeholder="Email Address"
+                className="w-full p-4 border-3 rounded-2xl outline-none transition-colors text-xl font-semibold"
+                style={{
+                  borderColor: 'var(--clay-border)',
+                  background: 'var(--clay-bg-secondary)',
+                  color: 'var(--clay-text-primary)'
+                }}
+                required
+                disabled={forgotPasswordLoading}
+              />
+
+              {forgotPasswordError && (
+                <p className="text-lg text-center font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
+                  {forgotPasswordError}
+                </p>
+              )}
+
+              {forgotPasswordMessage && (
+                <p className="text-lg text-center font-semibold p-4 rounded-2xl" style={{
+                  color: 'white',
+                  background: 'linear-gradient(135deg, #a8d5ba 0%, #88c4a0 100%)'
+                }}>
+                  {forgotPasswordMessage}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={forgotPasswordLoading || !forgotPasswordEmail}
+                className="w-full py-4 px-6 text-2xl font-bold rounded-2xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary"
+              >
+                {forgotPasswordLoading ? "Sending..." : "Send Reset Link"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForgotPasswordModal(false);
+                  setForgotPasswordEmail(studentEmail);
+                  setForgotPasswordError("");
+                  setForgotPasswordMessage("");
+                }}
+                className="w-full py-4 px-6 text-xl font-bold rounded-2xl transition-all"
+                style={{
+                  background: 'transparent',
+                  color: 'var(--clay-text-secondary)',
+                  border: '2px solid var(--clay-border)',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+            </form>
           </div>
         </div>
       )}
