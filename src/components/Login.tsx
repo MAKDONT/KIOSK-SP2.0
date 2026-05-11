@@ -800,7 +800,7 @@ export default function Login() {
                 <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-success" style={{ color: 'white' }}>
                   IN CONSULTATION ({filteredServingStudents.length})
                 </h3>
-                <div className="space-y-3">
+                <div className="space-y-3 scrollable-list">
                   {selectedStudentDepartment === null ? (
                     // Show grouped by department
                     groupQueueByDepartment(filteredServingStudents).map(([dept, items]) => (
@@ -847,7 +847,7 @@ export default function Login() {
                 <h3 className="text-xl font-bold mb-3 px-4 py-2 rounded-lg badge badge-info" style={{ color: 'white' }}>
                   IN QUEUE ({filteredWaitingStudents.length})
                 </h3>
-                <div className="space-y-3">
+                <div className="space-y-3 scrollable-list">
                   {selectedStudentDepartment === null ? (
                     // Show grouped by department
                     groupQueueByDepartment(filteredWaitingStudents).map(([dept, items]) => (
@@ -922,7 +922,7 @@ export default function Login() {
               </div>
 
               {/* Faculty List - Grouped by department when showing all, flat when filtered */}
-              <div className="space-y-3">
+              <div className="space-y-3 scrollable-list">
                 {selectedFacultyDepartment === null ? (
                   // Show grouped by department
                   departmentGroups.map((group) => (

@@ -74,29 +74,36 @@ body {
 
 /* Webkit scrollbar (Chrome, Safari, Edge) */
 ::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
 }
 
 ::-webkit-scrollbar-track {
-  background: linear-gradient(135deg, rgba(245, 241, 237, 0.5) 0%, rgba(240, 235, 229, 0.5) 100%);
+  background: linear-gradient(135deg, rgba(245, 241, 237, 0.3) 0%, rgba(240, 235, 229, 0.3) 100%);
   border-radius: 10px;
+  margin: 5px 0;
 }
 
 ::-webkit-scrollbar-thumb {
   background: linear-gradient(135deg, var(--clay-accent-warm) 0%, #c29860 100%);
   border-radius: 10px;
   border: 2px solid var(--clay-bg-secondary);
-  box-shadow: 0 2px 8px var(--clay-shadow-soft);
+  box-shadow: 0 2px 8px var(--clay-shadow-medium);
+  min-height: 40px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(135deg, #db9969 0%, #d9a870 100%);
-  box-shadow: 0 4px 12px var(--clay-shadow-medium);
+  box-shadow: 0 4px 12px var(--clay-shadow-deep);
+  border-color: var(--clay-accent-warm);
 }
 
 ::-webkit-scrollbar-thumb:active {
   background: linear-gradient(135deg, #c97f50 0%, #bb7344 100%);
+}
+
+::-webkit-scrollbar-corner {
+  background: linear-gradient(135deg, rgba(245, 241, 237, 0.3) 0%, rgba(240, 235, 229, 0.3) 100%);
 }
 
 /* Firefox scrollbar */
@@ -399,6 +406,15 @@ hr,
   .overflow-y-auto {
     scrollbar-gutter: stable;
   }
+}
+
+/* Scrollable list containers - Force visible scrollbars */
+.scrollable-list {
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  padding-right: 4px;
 }
 
 /* ============================================

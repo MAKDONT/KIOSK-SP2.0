@@ -528,7 +528,7 @@ export default function KioskView() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto pr-0 sm:pr-2 lg:pr-4 space-y-4 sm:space-y-6">
+          <div className="flex-1 overflow-y-auto pr-0 sm:pr-2 lg:pr-4 space-y-4 sm:space-y-6 scrollable-list">
             <AnimatePresence mode="popLayout">
               {fetching ? (
                 <motion.div
