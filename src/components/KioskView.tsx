@@ -55,6 +55,68 @@ export default function KioskView() {
       navigate("/");
       return;
     }
+    
+    // Comprehensive zoom prevention
+    let lastTouchTime = 0;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+    
+    const preventZoom = (e: TouchEvent) => {
+      if (e.touches.length > 1) {
+        e.preventDefault();
+        return;
+      }
+      
+      // Prevent double-tap zoom
+      const now = new Date().getTime();
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const diffTime = now - lastTouchTime;
+        const diffX = Math.abs(touch.clientX - lastTouchX);
+        const diffY = Math.abs(touch.clientY - lastTouchY);
+        
+        if (diffTime < 300 && diffX < 50 && diffY < 50) {
+          e.preventDefault();
+        }
+        
+        lastTouchTime = now;
+        lastTouchX = touch.clientX;
+        lastTouchY = touch.clientY;
+      }
+    };
+    
+    const preventTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length > 1) {
+        e.preventDefault();
+      }
+    };
+    
+    // Prevent wheel zoom (Ctrl + scroll)
+    const preventWheelZoom = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+      }
+    };
+    
+    // Prevent keyboard zoom
+    const preventKeyZoom = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '0')) {
+        e.preventDefault();
+      }
+    };
+    
+    // Prevent gesturestart for iOS
+    const preventGesture = (e: any) => {
+      e.preventDefault();
+    };
+    
+    document.addEventListener("touchstart", preventZoom, { passive: false });
+    document.addEventListener("touchmove", preventZoom, { passive: false });
+    document.addEventListener("touchend", preventTouchEnd, { passive: false });
+    document.addEventListener("wheel", preventWheelZoom, { passive: false });
+    document.addEventListener("keydown", preventKeyZoom, { passive: false });
+    document.addEventListener("gesturestart", preventGesture, { passive: false });
+    
     fetchFaculty();
     fetchBookedSlots();
     
@@ -81,6 +143,13 @@ export default function KioskView() {
       if (ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
+      // Clean up event listeners
+      document.removeEventListener("touchstart", preventZoom);
+      document.removeEventListener("touchmove", preventZoom);
+      document.removeEventListener("touchend", preventTouchEnd);
+      document.removeEventListener("wheel", preventWheelZoom);
+      document.removeEventListener("keydown", preventKeyZoom);
+      document.removeEventListener("gesturestart", preventGesture);
     };
   }, []);
 
