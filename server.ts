@@ -149,6 +149,83 @@ function isPasswordHashed(stored: string): boolean {
   return stored.startsWith(HASH_PREFIX);
 }
 
+// ===== PIN UTILITIES =====
+/**
+ * Validate PIN format (4-6 digits)
+ */
+function validatePIN(pin: string): { valid: boolean; error?: string } {
+  const pinStr = String(pin || "").trim();
+  
+  if (!pinStr) {
+    return { valid: false, error: "PIN is required" };
+  }
+  
+  if (!/^\d{4,6}$/.test(pinStr)) {
+    return { valid: false, error: "PIN must be 4-6 digits" };
+  }
+  
+  return { valid: true };
+}
+
+/**
+ * Hash PIN for storage
+ */
+function hashPIN(pin: string): string {
+  return crypto.createHash("sha256").update(pin).digest("hex");
+}
+
+/**
+ * Verify PIN against hash
+ */
+function verifyPIN(pin: string, hash: string): boolean {
+  return hashPIN(pin) === hash;
+}
+
+// ===== EMAIL VERIFICATION UTILITIES =====
+/**
+ * Generate email verification token
+ */
+function generateEmailVerificationToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+/**
+ * Send email verification
+ */
+async function sendEmailVerification(to: string, verificationLink: string, name: string) {
+  const emailSubject = "Verify Your Email - Student Consultation System";
+  const emailHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background: linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%); padding: 30px; border-radius: 15px; margin-bottom: 20px;">
+        <h1 style="color: #333; margin: 0; text-align: center;">Email Verification Required</h1>
+      </div>
+      
+      <div style="background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+        <p style="color: #666; margin-bottom: 15px;">Hi ${name},</p>
+        <p style="color: #666; margin-bottom: 15px;">Thank you for registering! Please verify your email address to complete your registration.</p>
+        
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${verificationLink}" style="display: inline-block; background: linear-gradient(135deg, #d4a574 0%, #c9945f 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Verify Email</a>
+        </div>
+        
+        <p style="color: #999; font-size: 13px; margin-bottom: 10px;">Or copy this link:</p>
+        <p style="color: #0066cc; font-size: 12px; word-break: break-all; background: #f0f0f0; padding: 10px; border-radius: 5px;">${verificationLink}</p>
+      </div>
+      
+      <div style="background: #fff3cd; padding: 15px; border-radius: 10px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
+        <p style="color: #856404; margin: 0; font-size: 14px;">This link will expire in 24 hours. If you did not register, please ignore this email.</p>
+      </div>
+      
+      <div style="text-align: center; color: #999; font-size: 12px; margin-top: 20px;">
+        <p>Student Consultation System</p>
+        <p>This is an automated email. Please do not reply to this email.</p>
+      </div>
+    </div>
+  `;
+
+  await sendEmailNotification(to, emailSubject, emailHtml);
+}
+
 // --- Rate Limiting ---
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
@@ -3657,107 +3734,46 @@ async function startServer() {
 
   app.get("/api/students/:id", async (req, res) => {
     try {
-      const lookupValue = req.params.id;
-      console.log(`🔍 GET /api/students/:id - Looking up student by student_number: "${lookupValue}"`);
+      const lookupValue = req.params.id.trim();
+      console.log(`🔍 GET /api/students/:id - Looking up student: "${lookupValue}"`);
       
-      const { data, error } = await getSupabase()
+      // Try lookup by ID (student_number) first
+      const { data: idData, error: idError } = await getSupabase()
         .from("students")
-        .select("*")
-        .eq("student_number", lookupValue)
+        .select("id, name, email, course")
+        .eq("id", lookupValue)
         .maybeSingle();
       
-      if (error) {
-        console.error(`❌ Lookup error for "${lookupValue}":`, error);
-        return res.status(500).json({ error: "Database error: " + error.message });
+      if (idData) {
+        console.log(`✅ Found student by ID: ${idData.id}`);
+        return res.json({
+          id: idData.id,
+          name: idData.name,
+          email: idData.email,
+          course: idData.course || ""
+        });
       }
       
-      if (!data) {
-        console.log(`❌ No student found with student_number: "${lookupValue}"`);
-        console.log(`   Length: ${lookupValue.length}, Type: ${typeof lookupValue}`);
-        
-        // Fallback 1: Try looking up by email
-        console.log(`🔄 Fallback 1: Trying email lookup...`);
-        const { data: emailData } = await getSupabase()
-          .from("students")
-          .select("*")
-          .eq("email", lookupValue)
-          .maybeSingle();
-        
-        if (emailData) {
-          console.log(`✅ Found by email! ID=${emailData.id}`);
-          return res.json({
-            id: emailData.id,
-            name: emailData.full_name,
-            email: emailData.email,
-            password: emailData.password || ""
-          });
-        }
-        
-        // Fallback 2: Try case-insensitive search
-        console.log(`🔄 Fallback 2: Trying case-insensitive student_number search...`);
-        const { data: allForCaseInsensitive } = await getSupabase()
-          .from("students")
-          .select("*");
-        
-        const caseInsensitiveMatch = allForCaseInsensitive?.find((s: any) => 
-          s.student_number && s.student_number.toLowerCase() === lookupValue.toLowerCase()
-        );
-        
-        if (caseInsensitiveMatch) {
-          console.log(`✅ Found with case-insensitive match! ID=${caseInsensitiveMatch.id}, student_number="${caseInsensitiveMatch.student_number}"`);
-          return res.json({
-            id: caseInsensitiveMatch.id,
-            name: caseInsensitiveMatch.full_name,
-            email: caseInsensitiveMatch.email,
-            password: caseInsensitiveMatch.password || ""
-          });
-        }
-        
-        // Fallback 3: Try substring/contains search
-        console.log(`🔄 Fallback 3: Trying substring search...`);
-        const substringMatch = allForCaseInsensitive?.find((s: any) => 
-          s.student_number && (
-            s.student_number.includes(lookupValue) || 
-            lookupValue.includes(s.student_number) ||
-            s.email.includes(lookupValue) ||
-            lookupValue.includes(s.email)
-          )
-        );
-        
-        if (substringMatch) {
-          console.log(`✅ Found with substring match! ID=${substringMatch.id}, student_number="${substringMatch.student_number}"`);
-          return res.json({
-            id: substringMatch.id,
-            name: substringMatch.full_name,
-            email: substringMatch.email,
-            password: substringMatch.password || ""
-          });
-        }
-        
-        // Debug: Show all students for troubleshooting
-        console.log(`\n❌ NO MATCH FOUND. Showing ALL students in database for debugging:`);
-        if (allForCaseInsensitive && allForCaseInsensitive.length > 0) {
-          allForCaseInsensitive.forEach((s: any, idx: number) => {
-            const match_num = s.student_number === lookupValue ? " ✓ EXACT MATCH" : "";
-            const match_num_ci = s.student_number?.toLowerCase() === lookupValue.toLowerCase() ? " ✓ CASE-INSENSITIVE MATCH" : "";
-            const match_email = s.email === lookupValue ? " ✓ EMAIL EXACT MATCH" : "";
-            console.log(`   [${idx}] student_number="${s.student_number}" | email="${s.email}" | name="${s.full_name}" | id="${s.id}"${match_num}${match_num_ci}${match_email}`);
-          });
-        } else {
-          console.log(`   (Database is empty!)`);
-        }
-        
-        console.log(`\nSearched for: "${lookupValue}" (length: ${lookupValue.length})\n`);
-        return res.status(404).json({ error: "Student not found" });
+      // Fallback: Try lookup by email
+      console.log(`🔄 Trying email lookup for: ${lookupValue}`);
+      const { data: emailData } = await getSupabase()
+        .from("students")
+        .select("id, name, email, course")
+        .eq("email", lookupValue)
+        .maybeSingle();
+      
+      if (emailData) {
+        console.log(`✅ Found student by email: ${emailData.id}`);
+        return res.json({
+          id: emailData.id,
+          name: emailData.name,
+          email: emailData.email,
+          course: emailData.course || ""
+        });
       }
       
-      console.log(`✅ Found student: ID=${data.id}, student_number="${data.student_number}", name="${data.full_name}", email="${data.email}"`);
-      res.json({
-        id: data.id,
-        name: data.full_name,
-        email: data.email,
-        password: data.password || ""
-      });
+      console.log(`❌ No student found for: "${lookupValue}"`);
+      return res.status(404).json({ error: "Student not found" });
     } catch (err: any) {
       console.error("Student fetch error:", err);
       res.status(500).json({ error: err.message });
@@ -3767,7 +3783,7 @@ async function startServer() {
   // Register Student
   app.post("/api/students/register", async (req, res) => {
     try {
-      const { student_number, full_name, email, course, password } = req.body;
+      const { student_number, full_name, email, course, pin } = req.body;
 
       console.log(`📝 Student registration attempt: student_number="${student_number}", email="${email}"`);
 
@@ -3776,42 +3792,59 @@ async function startServer() {
         return res.status(400).json({ error: "Student number, name, and email are required" });
       }
 
-      // Check if student already exists by student_number OR email
+      // Validate PIN
+      const pinValidation = validatePIN(pin);
+      if (!pinValidation.valid) {
+        return res.status(400).json({ error: pinValidation.error });
+      }
+
+      // Check if student already exists by id (student_number) OR email
       const { data: existingStudent, error: checkError } = await getSupabase()
         .from("students")
         .select("*")
-        .or(`student_number.eq.${student_number},email.eq.${email}`)
+        .or(`id.eq.${student_number},email.eq.${email}`)
         .maybeSingle();
 
       if (checkError) {
         console.error("Student check error:", checkError);
       }
 
-      let student;
-
       if (existingStudent) {
         // Student already exists - just return their data
         console.log(`✅ Student already exists: ${existingStudent.id}`);
         res.json({
           id: existingStudent.id,
-          student_number: existingStudent.student_number,
-          name: existingStudent.full_name,
-          email: existingStudent.email
+          student_number: existingStudent.id,
+          name: existingStudent.name,
+          email: existingStudent.email,
+          email_verified: existingStudent.email_verified
         });
         return;
       }
+
+      // Generate email verification token
+      const verificationToken = generateEmailVerificationToken();
+      const verificationTokenHash = crypto.createHash("sha256").update(verificationToken).digest("hex");
+      const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+
+      // Hash PIN
+      const pinHash = hashPIN(pin);
 
       // Create new student
       console.log(`➕ Creating new student: ${student_number}`);
       const { data: newStudent, error: createError } = await getSupabase()
         .from("students")
         .insert({
-          student_number,
-          full_name,
+          id: student_number,
+          name: full_name,
           email,
-          password: password ? password.trim() : null,
-          password_created_at: password ? new Date().toISOString() : null,
-          password_last_changed_at: password ? new Date().toISOString() : null
+          pin: pinHash,
+          pin_created_at: new Date().toISOString(),
+          pin_last_changed_at: new Date().toISOString(),
+          email_verified: false,
+          email_verification_token: verificationTokenHash,
+          email_verification_expires_at: verificationExpiresAt,
+          course: course || null
         })
         .select()
         .single();
@@ -3821,13 +3854,26 @@ async function startServer() {
         return res.status(500).json({ error: createError.message || "Failed to create student record" });
       }
 
+      // Send email verification
+      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(newStudent.email)}`;
+      
+      try {
+        await sendEmailVerification(newStudent.email, verificationLink, newStudent.name);
+        console.log(`✉️ Email verification sent to: ${newStudent.email}`);
+      } catch (err: any) {
+        console.error("Failed to send verification email:", err);
+      }
+
       // Return student data
-      console.log(`✅ Student created successfully: ID=${newStudent.id}, student_number=${newStudent.student_number}`);
+      console.log(`✅ Student created successfully: ID=${newStudent.id}, student_number=${newStudent.id}`);
       res.json({
         id: newStudent.id,
-        student_number: newStudent.student_number,
-        name: newStudent.full_name,
-        email: newStudent.email
+        student_number: newStudent.id,
+        name: newStudent.name,
+        email: newStudent.email,
+        email_verified: newStudent.email_verified,
+        message: "Registration successful! Please verify your email to complete setup."
       });
     } catch (err: any) {
       console.error("Student registration error:", err);
@@ -3835,36 +3881,94 @@ async function startServer() {
     }
   });
 
-  // Set/Update Student Password
-  app.post("/api/students/:id/password", async (req, res) => {
+  // Set/Update Student PIN
+  app.post("/api/students/:id/pin", async (req, res) => {
     try {
-      const { password } = req.body;
-      if (!password) {
-        return res.status(400).json({ error: "Password is required" });
+      const { pin } = req.body;
+      
+      const pinValidation = validatePIN(pin);
+      if (!pinValidation.valid) {
+        return res.status(400).json({ error: pinValidation.error });
       }
 
-      const trimmedPassword = password.trim();
-      console.log(`🔐 Setting password for student ${req.params.id}: "${trimmedPassword}" (length: ${trimmedPassword.length})`);
+      const pinHash = hashPIN(pin);
+      console.log(`🔐 Setting PIN for student ${req.params.id}`);
 
       const { data, error } = await getSupabase()
         .from("students")
         .update({
-          password: trimmedPassword,
-          password_last_changed_at: new Date().toISOString()
+          pin: pinHash,
+          pin_last_changed_at: new Date().toISOString()
         })
         .eq("id", req.params.id)
         .select()
         .single();
 
       if (error) {
-        console.error("Update password error:", error);
-        return res.status(500).json({ error: error.message || "Failed to set password" });
+        console.error("Update PIN error:", error);
+        return res.status(500).json({ error: error.message || "Failed to set PIN" });
       }
 
-      res.json({ success: true, message: "Password updated successfully" });
+      res.json({ success: true, message: "PIN updated successfully" });
     } catch (err: any) {
-      console.error("Set password error:", err);
-      res.status(500).json({ error: err.message || "Failed to set password" });
+      console.error("Set PIN error:", err);
+      res.status(500).json({ error: err.message || "Failed to set PIN" });
+    }
+  });
+
+  // Verify Email Address
+  app.post("/api/students/verify-email", async (req, res) => {
+    try {
+      const { token, email } = req.body;
+      
+      if (!token || !email) {
+        return res.status(400).json({ error: "Token and email are required" });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+      console.log(`✉️ Email verification attempt for: ${normalizedEmail}`);
+
+      // Find student with matching token
+      const { data: student, error: findError } = await getSupabase()
+        .from("students")
+        .select("id, email_verified, email_verification_expires_at")
+        .eq("email", normalizedEmail)
+        .eq("email_verification_token", tokenHash)
+        .maybeSingle();
+
+      if (findError || !student) {
+        console.log(`⚠️ Email verification failed: invalid token for ${normalizedEmail}`);
+        return res.status(400).json({ error: "Invalid or expired verification link" });
+      }
+
+      // Check if token is expired
+      if (student.email_verification_expires_at && new Date(student.email_verification_expires_at) < new Date()) {
+        console.log(`⚠️ Email verification token expired for ${normalizedEmail}`);
+        return res.status(400).json({ error: "Verification link has expired. Please register again." });
+      }
+
+      // Mark email as verified
+      const { error: updateError } = await getSupabase()
+        .from("students")
+        .update({
+          email_verified: true,
+          email_verification_token: null,
+          email_verification_expires_at: null
+        })
+        .eq("id", student.id);
+
+      if (updateError) {
+        console.error("Email verification update error:", updateError);
+        return res.status(500).json({ error: "Failed to verify email" });
+      }
+
+      console.log(`✅ Email verified successfully for: ${normalizedEmail}`);
+      res.json({ success: true, message: "Email verified successfully! You can now log in." });
+    } catch (err: any) {
+      console.error("Email verification error:", err);
+      res.status(500).json({ error: err.message || "Email verification failed" });
     }
   });
 
