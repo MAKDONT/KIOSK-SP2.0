@@ -555,6 +555,164 @@ let supabaseClient: SupabaseClient | null = null;
 let telegramBot: TelegramBot | null = null;
 let telegramBotInitialized = false;
 
+// ===== EMAIL QUEUE SYSTEM FOR ASYNC DELIVERY =====
+interface EmailJob {
+  id: string;
+  to: string;
+  subject: string;
+  html: string;
+  createdAt: number;
+  attempts: number;
+  nextRetryAt?: number;
+  lastError?: string;
+}
+
+class EmailQueue {
+  private queue: EmailJob[] = [];
+  private processing = false;
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY_MS = 5000; // 5 seconds between retries
+  private readonly RATE_LIMIT_MS = 100; // 100ms between emails to avoid throttling
+  private lastEmailSentAt = 0;
+
+  enqueue(email: EmailJob) {
+    this.queue.push(email);
+    console.log(`[EmailQueue] Email queued | id=${email.id} | to=${email.to} | queue_size=${this.queue.length}`);
+    // Start processing if not already running
+    if (!this.processing) {
+      this.process().catch(err => console.error("[EmailQueue] Processing error:", err));
+    }
+  }
+
+  private async process() {
+    if (this.processing || this.queue.length === 0) return;
+    this.processing = true;
+
+    try {
+      while (this.queue.length > 0) {
+        // Apply rate limiting to prevent SendGrid throttling
+        const timeSinceLastEmail = Date.now() - this.lastEmailSentAt;
+        if (timeSinceLastEmail < this.RATE_LIMIT_MS) {
+          await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_MS - timeSinceLastEmail));
+        }
+
+        const job = this.queue[0];
+
+        // Check if job should be retried
+        if (job.nextRetryAt && Date.now() < job.nextRetryAt) {
+          // Not ready to retry yet, wait and check again
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+
+        try {
+          await this.sendEmail(job);
+          this.queue.shift(); // Remove successful email from queue
+        } catch (error: any) {
+          job.attempts++;
+          job.lastError = error.message;
+
+          if (job.attempts < this.MAX_RETRIES) {
+            job.nextRetryAt = Date.now() + this.RETRY_DELAY_MS * job.attempts;
+            console.log(`[EmailQueue] Retry scheduled | id=${job.id} | attempt=${job.attempts}/${this.MAX_RETRIES} | next_retry_in=${this.RETRY_DELAY_MS * job.attempts}ms`);
+            // Move to end of queue for retry
+            this.queue.shift();
+            this.queue.push(job);
+          } else {
+            console.error(`[EmailQueue] Max retries exceeded | id=${job.id} | error=${error.message}`);
+            this.queue.shift(); // Remove failed email from queue
+          }
+        }
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private async sendEmail(job: EmailJob): Promise<void> {
+    if (!process.env.SENDGRID_API_KEY) {
+      console.log("[EmailQueue] SendGrid not configured. Email skipped.");
+      return;
+    }
+
+    const trackingId = crypto.randomUUID();
+    const startedAt = Date.now();
+    const sendStartedAtIso = new Date(startedAt).toISOString();
+
+    console.log(`[EmailQueue] Sending | id=${job.id} | trackingId=${trackingId} | to=${job.to} | attempt=${job.attempts + 1}`);
+
+    try {
+      const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@consultation-system.com";
+      const msg: any = {
+        to: job.to,
+        from: fromEmail,
+        subject: job.subject,
+        html: job.html,
+        custom_args: {
+          tracking_id: trackingId,
+          queue_job_id: job.id
+        }
+      };
+
+      await logEmailDeliveryRecordStart({
+        trackingId,
+        to: job.to,
+        subject: job.subject,
+        sendStartedAtIso
+      });
+
+      const [response] = await sgMail.send(msg);
+      const elapsedMs = Date.now() - startedAt;
+      const sendCompletedAtIso = new Date().toISOString();
+      const messageIdHeader = response?.headers?.["x-message-id"];
+      const rawMessageId = Array.isArray(messageIdHeader) ? messageIdHeader[0] : messageIdHeader || "n/a";
+      const messageId = normalizeSendGridMessageId(rawMessageId) || rawMessageId;
+
+      this.lastEmailSentAt = Date.now();
+
+      await logEmailDeliveryRecordFinish({
+        trackingId,
+        sendCompletedAtIso,
+        messageId,
+        statusCode: response?.statusCode,
+        durationMs: elapsedMs
+      });
+
+      console.log(`[EmailQueue] Success | id=${job.id} | trackingId=${trackingId} | to=${job.to} | status=${response?.statusCode} | durationMs=${elapsedMs}`);
+    } catch (error: any) {
+      const elapsedMs = Date.now() - startedAt;
+      const sendCompletedAtIso = new Date().toISOString();
+      const statusCode = error?.code || error?.response?.statusCode || "unknown";
+
+      await logEmailDeliveryRecordFinish({
+        trackingId,
+        sendCompletedAtIso,
+        statusCode,
+        durationMs: elapsedMs,
+        lastError: error?.message || "Unknown email send error"
+      });
+
+      console.error(`[EmailQueue] Failed | id=${job.id} | to=${job.to} | status=${statusCode} | error=${error.message}`);
+      throw error;
+    }
+  }
+
+  getStatus() {
+    return {
+      queueSize: this.queue.length,
+      processing: this.processing,
+      jobs: this.queue.map(j => ({
+        id: j.id,
+        to: j.to,
+        attempts: j.attempts,
+        nextRetryAt: j.nextRetryAt
+      }))
+    };
+  }
+}
+
+const emailQueue = new EmailQueue();
+
 // Setup SendGrid
 async function setupSendGrid() {
   if (process.env.SENDGRID_API_KEY) {
@@ -843,68 +1001,23 @@ const persistSendGridWebhookEvent = async (event: any) => {
 
 async function sendEmailNotification(to: string, subject: string, html: string) {
   if (!process.env.SENDGRID_API_KEY) {
-    console.log("SendGrid not configured. Email skipped.");
+    console.log("[Email] SendGrid not configured. Email skipped.");
     return;
   }
-  
-  const trackingId = crypto.randomUUID();
-  const startedAt = Date.now();
-  const sendStartedAtIso = new Date(startedAt).toISOString();
-  console.log(`[Email] Sending started | trackingId=${trackingId} | to=${to} | subject=${subject}`);
-  await logEmailDeliveryRecordStart({
-    trackingId,
+
+  // Create email job and add to queue for async processing
+  const emailJob: EmailJob = {
+    id: crypto.randomUUID(),
     to,
     subject,
-    sendStartedAtIso
-  });
+    html,
+    createdAt: Date.now(),
+    attempts: 0
+  };
 
-  try {
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@consultation-system.com";
-    const msg: any = {
-      to,
-      from: fromEmail,
-      subject,
-      html,
-      custom_args: {
-        tracking_id: trackingId
-      }
-    };
-    
-    const [response] = await sgMail.send(msg);
-    const elapsedMs = Date.now() - startedAt;
-    const sendCompletedAtIso = new Date().toISOString();
-    const messageIdHeader = response?.headers?.["x-message-id"];
-    const rawMessageId = Array.isArray(messageIdHeader)
-      ? messageIdHeader[0]
-      : messageIdHeader || "n/a";
-    const messageId = normalizeSendGridMessageId(rawMessageId) || rawMessageId;
-
-    await logEmailDeliveryRecordFinish({
-      trackingId,
-      sendCompletedAtIso,
-      messageId,
-      statusCode: response?.statusCode,
-      durationMs: elapsedMs
-    });
-
-    console.log(
-      `[Email] Sending finished | trackingId=${trackingId} | to=${to} | status=${response?.statusCode ?? "n/a"} | messageId=${messageId} | durationMs=${elapsedMs}`
-    );
-  } catch (error: any) {
-    const elapsedMs = Date.now() - startedAt;
-    const sendCompletedAtIso = new Date().toISOString();
-    const statusCode = error?.code || error?.response?.statusCode || "n/a";
-    await logEmailDeliveryRecordFinish({
-      trackingId,
-      sendCompletedAtIso,
-      statusCode,
-      durationMs: elapsedMs,
-      lastError: error?.message || "Unknown email send error"
-    });
-    console.error(
-      `[Email] Sending failed | trackingId=${trackingId} | to=${to} | status=${statusCode} | durationMs=${elapsedMs} | error=${error.message}`
-    );
-  }
+  emailQueue.enqueue(emailJob);
+  console.log(`[Email] Queued | jobId=${emailJob.id} | to=${to}`);
+  // Return immediately without waiting for email to send
 }
 
 // ===== TELEGRAM NOTIFICATION FUNCTIONS =====
@@ -1174,6 +1287,14 @@ async function startServer() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, uptime: Math.floor(process.uptime()) });
+  });
+
+  // Email Queue Status Endpoint - Monitor async email delivery
+  app.get("/api/email-queue/status", (_req, res) => {
+    res.json({
+      emailQueue: emailQueue.getStatus(),
+      timestamp: new Date().toISOString()
+    });
   });
 
   // Simple ping endpoint for UptimeRobot and other monitoring services
