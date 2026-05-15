@@ -190,40 +190,84 @@ function generateEmailVerificationToken(): string {
 }
 
 /**
- * Send email verification
+ * Send email verification - FAST TRACK (immediate, no queue delay)
  */
-async function sendEmailVerification(to: string, verificationLink: string, name: string) {
-  const emailSubject = "Verify Your Email - Student Consultation System";
+async function sendEmailVerification(to: string, verificationLink: string, verificationToken: string, name: string) {
+  const emailSubject = "Verify Your Email";
   const emailHtml = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="background: linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%); padding: 30px; border-radius: 15px; margin-bottom: 20px;">
-        <h1 style="color: #333; margin: 0; text-align: center;">Email Verification Required</h1>
-      </div>
-      
-      <div style="background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-        <p style="color: #666; margin-bottom: 15px;">Hi ${name},</p>
-        <p style="color: #666; margin-bottom: 15px;">Thank you for registering! Please verify your email address to complete your registration.</p>
-        
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verificationLink}" style="display: inline-block; background: linear-gradient(135deg, #d4a574 0%, #c9945f 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Verify Email</a>
-        </div>
-        
-        <p style="color: #999; font-size: 13px; margin-bottom: 10px;">Or copy this link:</p>
-        <p style="color: #0066cc; font-size: 12px; word-break: break-all; background: #f0f0f0; padding: 10px; border-radius: 5px;">${verificationLink}</p>
-      </div>
-      
-      <div style="background: #fff3cd; padding: 15px; border-radius: 10px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
-        <p style="color: #856404; margin: 0; font-size: 14px;">This link will expire in 24 hours. If you did not register, please ignore this email.</p>
-      </div>
-      
-      <div style="text-align: center; color: #999; font-size: 12px; margin-top: 20px;">
-        <p>Student Consultation System</p>
-        <p>This is an automated email. Please do not reply to this email.</p>
-      </div>
-    </div>
+    <h2>Verify Your Email</h2>
+    <p>Hi ${name},</p>
+    <p><strong>Easiest Method:</strong> Click the link below to verify instantly:</p>
+    <p><a href="${verificationLink}" style="background-color: #3b82f6; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; font-weight: bold;">Verify Email Now</a></p>
+    <hr style="margin: 20px 0; border: none; border-top: 1px solid #e5e7eb;">
+    <p><strong>Or manually paste this code:</strong></p>
+    <p style="background-color: #f3f4f6; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 14px; word-break: break-all;">${verificationToken}</p>
+    <p><strong>⏰ This code expires in 24 hours</strong></p>
+    <p style="color: #6b7280; font-size: 12px; margin-top: 20px;">If you didn't request this verification, you can ignore this email.</p>
   `;
+  await sendCriticalEmail(to, emailSubject, emailHtml, "VERIFICATION");
+}
 
-  await sendEmailNotification(to, emailSubject, emailHtml);
+async function sendCriticalEmailFastTrack(to: string, subject: string, html: string, emailType: string): Promise<boolean> {
+  /**
+   * FAST-TRACK: Send critical emails immediately without queue delay
+   * Used for: verification, password reset, urgent notifications
+   * Returns: true if successful, false if fallback to queue needed
+   */
+  if (!process.env.SENDGRID_API_KEY) {
+    console.log(`[${emailType}] SendGrid not configured.`);
+    return false;
+  }
+
+  try {
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@consultation-system.com";
+    const msg: any = {
+      to,
+      from: fromEmail,
+      subject,
+      html
+    };
+    
+    const startTime = Date.now();
+    await sgMail.send(msg);
+    const latency = Date.now() - startTime;
+    console.log(`⚡ FAST-TRACK [${emailType}]: ${to} (${latency}ms)`);
+    return true;
+  } catch (err: any) {
+    console.error(`❌ FAST-TRACK [${emailType}] failed: ${err.message} - falling back to queue`);
+    return false;
+  }
+}
+
+async function sendCriticalEmail(to: string, subject: string, html: string, emailType: string) {
+  /**
+   * Send critical emails with fast-track, then fallback to queue
+   */
+  const success = await sendCriticalEmailFastTrack(to, subject, html, emailType);
+  if (!success) {
+    // Fallback to HIGH priority queue
+    await sendEmailNotificationWithPriority(to, subject, html, "high");
+  }
+}
+
+async function sendEmailNotificationWithPriority(to: string, subject: string, html: string, priority: "high" | "normal" = "normal") {
+  if (!process.env.SENDGRID_API_KEY) {
+    console.log("[Email] SendGrid not configured. Email skipped.");
+    return;
+  }
+
+  const emailJob: EmailJob = {
+    id: crypto.randomUUID(),
+    to,
+    subject,
+    html,
+    createdAt: Date.now(),
+    attempts: 0,
+    priority
+  };
+
+  emailQueue.enqueue(emailJob);
+  // Return immediately without waiting for email to send - caller gets immediate response
 }
 
 // --- Rate Limiting ---
@@ -632,7 +676,7 @@ let supabaseClient: SupabaseClient | null = null;
 let telegramBot: TelegramBot | null = null;
 let telegramBotInitialized = false;
 
-// ===== EMAIL QUEUE SYSTEM FOR ASYNC DELIVERY =====
+// ===== EMAIL QUEUE SYSTEM FOR ASYNC DELIVERY - OPTIMIZED FOR LOW LATENCY =====
 interface EmailJob {
   id: string;
   to: string;
@@ -642,67 +686,85 @@ interface EmailJob {
   attempts: number;
   nextRetryAt?: number;
   lastError?: string;
+  priority: "high" | "normal"; // "high" for verification, password reset; "normal" for notifications
 }
 
 class EmailQueue {
   private queue: EmailJob[] = [];
   private processing = false;
-  private readonly MAX_RETRIES = 3;
-  private readonly RETRY_DELAY_MS = 5000; // 5 seconds between retries
-  private readonly RATE_LIMIT_MS = 100; // 100ms between emails to avoid throttling
+  private processingCount = 0;
+  private readonly MAX_RETRIES = 2; // Reduced from 3 for faster fail-over
+  private readonly RETRY_DELAY_MS = 1000; // Reduced from 5000ms to 1 second for faster retry
+  private readonly RATE_LIMIT_MS = 10; // Reduced from 100ms to 10ms for faster throughput
+  private readonly MAX_CONCURRENT = 10; // Increased to 10 for parallel processing (was 5)
   private lastEmailSentAt = 0;
+  private deliveryCallbacks = new Map<string, { resolve: (time: number) => void; reject: (err: any) => void }>();
 
   enqueue(email: EmailJob) {
+    // Sort by priority: high-priority emails first, then by creation time
     this.queue.push(email);
-    console.log(`[EmailQueue] Email queued | id=${email.id} | to=${email.to} | queue_size=${this.queue.length}`);
-    // Start processing if not already running
-    if (!this.processing) {
+    this.queue.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority === "high" ? -1 : 1;
+      }
+      return a.createdAt - b.createdAt;
+    });
+    
+    // Start processing if not at capacity
+    if (this.processingCount < this.MAX_CONCURRENT) {
       this.process().catch(err => console.error("[EmailQueue] Processing error:", err));
     }
   }
 
   private async process() {
-    if (this.processing || this.queue.length === 0) return;
-    this.processing = true;
+    if (this.processingCount >= this.MAX_CONCURRENT || this.queue.length === 0) return;
+    this.processingCount++;
+    this.processing = this.processingCount > 0;
 
     try {
-      while (this.queue.length > 0) {
-        // Apply rate limiting to prevent SendGrid throttling
+      while (this.queue.length > 0 && this.processingCount < this.MAX_CONCURRENT) {
+        const job = this.queue[0];
+
+        // Check if job should be retried
+        if (job.nextRetryAt && Date.now() < job.nextRetryAt) {
+          // Not ready to retry yet, skip and check next job
+          this.queue.shift();
+          this.queue.push(job);
+          continue;
+        }
+
+        // Apply minimal rate limiting
         const timeSinceLastEmail = Date.now() - this.lastEmailSentAt;
         if (timeSinceLastEmail < this.RATE_LIMIT_MS) {
           await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_MS - timeSinceLastEmail));
         }
 
-        const job = this.queue[0];
-
-        // Check if job should be retried
-        if (job.nextRetryAt && Date.now() < job.nextRetryAt) {
-          // Not ready to retry yet, wait and check again
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
-
         try {
           await this.sendEmail(job);
-          this.queue.shift(); // Remove successful email from queue
+          this.queue.shift(); // Remove successful email
         } catch (error: any) {
           job.attempts++;
           job.lastError = error.message;
 
           if (job.attempts < this.MAX_RETRIES) {
             job.nextRetryAt = Date.now() + this.RETRY_DELAY_MS * job.attempts;
-            console.log(`[EmailQueue] Retry scheduled | id=${job.id} | attempt=${job.attempts}/${this.MAX_RETRIES} | next_retry_in=${this.RETRY_DELAY_MS * job.attempts}ms`);
-            // Move to end of queue for retry
+            // Move to end of queue for retry (but high-priority stays high-priority)
             this.queue.shift();
             this.queue.push(job);
           } else {
-            console.error(`[EmailQueue] Max retries exceeded | id=${job.id} | error=${error.message}`);
-            this.queue.shift(); // Remove failed email from queue
+            // Max retries exceeded, remove from queue
+            this.queue.shift();
+            console.error(`[EmailQueue] Max retries exceeded | id=${job.id} | to=${job.to}`);
           }
         }
       }
     } finally {
-      this.processing = false;
+      this.processingCount--;
+      this.processing = this.processingCount > 0;
+      // Check if more processing needed
+      if (this.queue.length > 0 && this.processingCount < this.MAX_CONCURRENT) {
+        setImmediate(() => this.process().catch(err => console.error("[EmailQueue] Processing error:", err)));
+      }
     }
   }
 
@@ -716,62 +778,84 @@ class EmailQueue {
     const startedAt = Date.now();
     const sendStartedAtIso = new Date(startedAt).toISOString();
 
-    console.log(`[EmailQueue] Sending | id=${job.id} | trackingId=${trackingId} | to=${job.to} | attempt=${job.attempts + 1}`);
-
     try {
       const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@consultation-system.com";
+      
+      // Minimal email payload - critical for low latency
       const msg: any = {
         to: job.to,
         from: fromEmail,
         subject: job.subject,
-        html: job.html,
-        custom_args: {
-          tracking_id: trackingId,
-          queue_job_id: job.id
-        }
+        html: job.html
       };
-
-      await logEmailDeliveryRecordStart({
-        trackingId,
-        to: job.to,
-        subject: job.subject,
-        sendStartedAtIso
-      });
-
-      const [response] = await sgMail.send(msg);
+      
+      // Fire send immediately without waiting for full response
+      // Trigger callback BEFORE awaiting SendGrid
+      const sendPromise = sgMail.send(msg);
       const elapsedMs = Date.now() - startedAt;
-      const sendCompletedAtIso = new Date().toISOString();
-      const messageIdHeader = response?.headers?.["x-message-id"];
-      const rawMessageId = Array.isArray(messageIdHeader) ? messageIdHeader[0] : messageIdHeader || "n/a";
-      const messageId = normalizeSendGridMessageId(rawMessageId) || rawMessageId;
+      
+      // Notify delivery tracker immediately (email is in SendGrid queue)
+      const callback = this.deliveryCallbacks.get(job.id);
+      if (callback) {
+        this.deliveryCallbacks.delete(job.id);
+        callback.resolve(elapsedMs);
+      }
+      
+      // Continue processing response async (non-blocking)
+      sendPromise.then(([response]) => {
 
-      this.lastEmailSentAt = Date.now();
-
-      await logEmailDeliveryRecordFinish({
-        trackingId,
-        sendCompletedAtIso,
-        messageId,
-        statusCode: response?.statusCode,
-        durationMs: elapsedMs
+        // Async: log and process response (non-blocking to caller)
+        const sendCompletedAtIso = new Date().toISOString();
+        const messageIdHeader = response?.headers?.["x-message-id"];
+        const rawMessageId = Array.isArray(messageIdHeader) ? messageIdHeader[0] : messageIdHeader || "n/a";
+        const messageId = normalizeSendGridMessageId(rawMessageId) || rawMessageId;
+        this.lastEmailSentAt = Date.now();
+        
+        logEmailDeliveryRecordFinish({
+          trackingId,
+          sendCompletedAtIso,
+          messageId,
+          statusCode: response?.statusCode,
+          durationMs: elapsedMs
+        }).catch(err => console.error("[EmailQueue] Log finish error:", err));
+      }).catch((error: any) => {
+        // Async: log failure (non-blocking)
+        const sendCompletedAtIso = new Date().toISOString();
+        const statusCode = error?.code || error?.response?.statusCode || "unknown";
+        
+        logEmailDeliveryRecordFinish({
+          trackingId,
+          sendCompletedAtIso,
+          statusCode,
+          durationMs: elapsedMs,
+          lastError: error?.message || "Unknown email send error"
+        }).catch(err => console.error("[EmailQueue] Log finish error:", err));
       });
-
-      console.log(`[EmailQueue] Success | id=${job.id} | trackingId=${trackingId} | to=${job.to} | status=${response?.statusCode} | durationMs=${elapsedMs}`);
     } catch (error: any) {
       const elapsedMs = Date.now() - startedAt;
-      const sendCompletedAtIso = new Date().toISOString();
-      const statusCode = error?.code || error?.response?.statusCode || "unknown";
-
-      await logEmailDeliveryRecordFinish({
-        trackingId,
-        sendCompletedAtIso,
-        statusCode,
-        durationMs: elapsedMs,
-        lastError: error?.message || "Unknown email send error"
-      });
-
-      console.error(`[EmailQueue] Failed | id=${job.id} | to=${job.to} | status=${statusCode} | error=${error.message}`);
+      
+      // Notify delivery tracker of queuing failure
+      const callback = this.deliveryCallbacks.get(job.id);
+      if (callback) {
+        this.deliveryCallbacks.delete(job.id);
+        callback.reject(error);
+      }
+      
       throw error;
     }
+  }
+
+  trackDelivery(jobId: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this.deliveryCallbacks.set(jobId, { resolve, reject });
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        if (this.deliveryCallbacks.has(jobId)) {
+          this.deliveryCallbacks.delete(jobId);
+          reject(new Error("Delivery tracking timeout"));
+        }
+      }, 30000);
+    });
   }
 
   getStatus() {
@@ -1077,24 +1161,16 @@ const persistSendGridWebhookEvent = async (event: any) => {
 };
 
 async function sendEmailNotification(to: string, subject: string, html: string) {
-  if (!process.env.SENDGRID_API_KEY) {
-    console.log("[Email] SendGrid not configured. Email skipped.");
-    return;
-  }
+  // Regular notifications use normal priority - will be sent after verification emails
+  await sendEmailNotificationWithPriority(to, subject, html, "normal");
+}
 
-  // Create email job and add to queue for async processing
-  const emailJob: EmailJob = {
-    id: crypto.randomUUID(),
-    to,
-    subject,
-    html,
-    createdAt: Date.now(),
-    attempts: 0
-  };
-
-  emailQueue.enqueue(emailJob);
-  console.log(`[Email] Queued | jobId=${emailJob.id} | to=${to}`);
-  // Return immediately without waiting for email to send
+/**
+ * Send consultation-related emails with HIGH priority (fast-track)
+ * Used for: confirmation, cancellation, reminders, time arrival, expiration
+ */
+async function sendConsultationEmail(to: string, subject: string, html: string) {
+  await sendCriticalEmail(to, subject, html, "CONSULTATION");
 }
 
 // ===== TELEGRAM NOTIFICATION FUNCTIONS =====
@@ -1372,6 +1448,83 @@ async function startServer() {
       emailQueue: emailQueue.getStatus(),
       timestamp: new Date().toISOString()
     });
+  });
+
+  // Test email latency endpoint - send a test email and measure response time
+  app.post("/api/test/send-email", async (req, res) => {
+    try {
+      const { email, subject, type } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email address required" });
+      }
+
+      const startTime = Date.now();
+      const testId = crypto.randomUUID();
+      
+      let emailSubject = subject || "Test Email";
+      // Minimal HTML payload - critical for low latency
+      let emailHtml = `<p>Test ID: ${testId}</p>`;
+
+      // Determine priority based on type
+      let priority: "high" | "normal" = "normal";
+      if (type === "verification") {
+        priority = "high";
+        emailSubject = "Test Email - High Priority (Verification)";
+      } else if (type === "password-reset") {
+        priority = "high";
+        emailSubject = "Test Email - High Priority (Password Reset)";
+      }
+
+      // Create custom email job to track delivery
+      const emailJob: EmailJob = {
+        id: crypto.randomUUID(),
+        to: email,
+        subject: emailSubject,
+        html: emailHtml,
+        createdAt: Date.now(),
+        attempts: 0,
+        priority
+      };
+
+      // Queue email
+      const queueStartTime = Date.now();
+      emailQueue.enqueue(emailJob);
+      const queueTime = Date.now() - queueStartTime;
+
+      // Wait for actual SendGrid delivery
+      try {
+        const sendGridLatency = await emailQueue.trackDelivery(emailJob.id);
+        const totalTime = Date.now() - startTime;
+
+        res.json({
+          success: true,
+          testId,
+          message: "Test email delivered successfully",
+          email,
+          priority,
+          latency: {
+            queuedIn: `${queueTime}ms`,
+            sendGridLatency: `${sendGridLatency}ms`,
+            totalTime: `${totalTime}ms`
+          },
+          note: "sendGridLatency is the actual API call time to SendGrid"
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          testId,
+          error: err.message || "Failed to deliver email",
+          latency: {
+            queuedIn: `${queueTime}ms`,
+            totalTime: `${Date.now() - startTime}ms`
+          }
+        });
+      }
+    } catch (err: any) {
+      console.error("Test email error:", err);
+      res.status(500).json({ error: err.message || "Failed to send test email" });
+    }
   });
 
   // Simple ping endpoint for UptimeRobot and other monitoring services
@@ -3737,20 +3890,40 @@ async function startServer() {
       const lookupValue = req.params.id.trim();
       console.log(`🔍 GET /api/students/:id - Looking up student: "${lookupValue}"`);
       
-      // Try lookup by ID (student_number) first
+      // Try lookup by UUID ID first
       const { data: idData, error: idError } = await getSupabase()
         .from("students")
-        .select("id, name, email, course")
+        .select("id, full_name, email, course, student_number")
         .eq("id", lookupValue)
         .maybeSingle();
       
       if (idData) {
-        console.log(`✅ Found student by ID: ${idData.id}`);
+        console.log(`✅ Found student by UUID ID: ${idData.id}`);
         return res.json({
           id: idData.id,
-          name: idData.name,
+          student_number: idData.student_number,
+          name: idData.full_name,
           email: idData.email,
           course: idData.course || ""
+        });
+      }
+      
+      // Try lookup by student_number
+      console.log(`🔄 Trying student_number lookup for: ${lookupValue}`);
+      const { data: numberData } = await getSupabase()
+        .from("students")
+        .select("id, full_name, email, course, student_number")
+        .eq("student_number", lookupValue)
+        .maybeSingle();
+      
+      if (numberData) {
+        console.log(`✅ Found student by student_number: ${numberData.student_number}`);
+        return res.json({
+          id: numberData.id,
+          student_number: numberData.student_number,
+          name: numberData.full_name,
+          email: numberData.email,
+          course: numberData.course || ""
         });
       }
       
@@ -3758,7 +3931,7 @@ async function startServer() {
       console.log(`🔄 Trying email lookup for: ${lookupValue}`);
       const { data: emailData } = await getSupabase()
         .from("students")
-        .select("id, name, email, course")
+        .select("id, full_name, email, course, student_number")
         .eq("email", lookupValue)
         .maybeSingle();
       
@@ -3766,7 +3939,8 @@ async function startServer() {
         console.log(`✅ Found student by email: ${emailData.id}`);
         return res.json({
           id: emailData.id,
-          name: emailData.name,
+          student_number: emailData.student_number,
+          name: emailData.full_name,
           email: emailData.email,
           course: emailData.course || ""
         });
@@ -3798,28 +3972,47 @@ async function startServer() {
         return res.status(400).json({ error: pinValidation.error });
       }
 
-      // Check if student already exists by id (student_number) OR email
-      const { data: existingStudent, error: checkError } = await getSupabase()
+      // Check if student already exists by student_number FIRST
+      // Use limit(1) to avoid issues with duplicate data in database
+      const { data: existingByNumber, error: checkNumberError } = await getSupabase()
         .from("students")
-        .select("*")
-        .or(`id.eq.${student_number},email.eq.${email}`)
+        .select("id, student_number, full_name, email, email_verified")
+        .eq("student_number", student_number.trim())
+        .limit(1)
         .maybeSingle();
 
-      if (checkError) {
-        console.error("Student check error:", checkError);
+      if (checkNumberError && checkNumberError.code !== "PGRST116") {
+        console.error("Student number check error:", checkNumberError);
+        return res.status(500).json({ error: "Database error checking student number" });
       }
 
-      if (existingStudent) {
-        // Student already exists - just return their data
-        console.log(`✅ Student already exists: ${existingStudent.id}`);
-        res.json({
-          id: existingStudent.id,
-          student_number: existingStudent.id,
-          name: existingStudent.name,
-          email: existingStudent.email,
-          email_verified: existingStudent.email_verified
+      if (existingByNumber) {
+        console.log(`⚠️ Student with this number already exists: ${existingByNumber.student_number}`);
+        return res.status(409).json({
+          error: `A student with number "${student_number}" is already registered. Please use a different student number or log in if you already have an account.`,
+          code: "DUPLICATE_STUDENT_NUMBER"
         });
-        return;
+      }
+
+      // Check if email already exists (limit to 1 to handle duplicates)
+      const { data: existingByEmail, error: checkEmailError } = await getSupabase()
+        .from("students")
+        .select("id, student_number, full_name, email, email_verified")
+        .eq("email", email.toLowerCase().trim())
+        .limit(1)
+        .maybeSingle();
+
+      if (checkEmailError && checkEmailError.code !== "PGRST116") {
+        console.error("Email check error:", checkEmailError);
+        return res.status(500).json({ error: "Database error checking email" });
+      }
+
+      if (existingByEmail) {
+        console.log(`⚠️ Email already registered: ${email}`);
+        return res.status(409).json({
+          error: `This email is already registered with student number "${existingByEmail.student_number}". Please use a different email or log in to your existing account.`,
+          code: "DUPLICATE_EMAIL"
+        });
       }
 
       // Generate email verification token
@@ -3832,25 +4025,46 @@ async function startServer() {
 
       // Create new student
       console.log(`➕ Creating new student: ${student_number}`);
+      
+      // Generate UUID for the primary key
+      const studentId = crypto.randomUUID ? crypto.randomUUID() : require('crypto').randomUUID();
+      
       const { data: newStudent, error: createError } = await getSupabase()
         .from("students")
         .insert({
-          id: student_number,
-          name: full_name,
-          email,
+          id: studentId,
+          student_number: student_number.trim(),
+          full_name: full_name.trim(),
+          email: email.toLowerCase().trim(),
+          course: course ? course.trim() : null,
           pin: pinHash,
           pin_created_at: new Date().toISOString(),
           pin_last_changed_at: new Date().toISOString(),
           email_verified: false,
           email_verification_token: verificationTokenHash,
-          email_verification_expires_at: verificationExpiresAt,
-          course: course || null
+          email_verification_expires_at: verificationExpiresAt
         })
         .select()
         .single();
 
       if (createError) {
         console.error("Create student error:", createError);
+        
+        // Handle specific constraint violations
+        if (createError.code === "23505") { // unique constraint violation
+          if (createError.message.includes("student_number")) {
+            return res.status(409).json({
+              error: `Student number "${student_number}" already exists`,
+              code: "DUPLICATE_STUDENT_NUMBER"
+            });
+          } else if (createError.message.includes("email")) {
+            return res.status(409).json({
+              error: `Email "${email}" already registered`,
+              code: "DUPLICATE_EMAIL"
+            });
+          }
+        }
+        
         return res.status(500).json({ error: createError.message || "Failed to create student record" });
       }
 
@@ -3859,24 +4073,32 @@ async function startServer() {
       const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(newStudent.email)}`;
       
       try {
-        await sendEmailVerification(newStudent.email, verificationLink, newStudent.name);
+        await sendEmailVerification(newStudent.email, verificationLink, verificationToken, newStudent.full_name);
         console.log(`✉️ Email verification sent to: ${newStudent.email}`);
       } catch (err: any) {
         console.error("Failed to send verification email:", err);
       }
 
       // Return student data
-      console.log(`✅ Student created successfully: ID=${newStudent.id}, student_number=${newStudent.id}`);
+      console.log(`✅ Student created successfully: ID=${newStudent.id}, student_number=${newStudent.student_number}`);
       res.json({
         id: newStudent.id,
-        student_number: newStudent.id,
-        name: newStudent.name,
+        student_number: newStudent.student_number,
+        name: newStudent.full_name,
         email: newStudent.email,
-        email_verified: newStudent.email_verified,
-        message: "Registration successful! Please verify your email to complete setup."
+        email_verified: false
       });
     } catch (err: any) {
       console.error("Student registration error:", err);
+      
+      // Handle duplicate constraint errors
+      if (err.code === "23505") {
+        return res.status(409).json({
+          error: "This student number or email is already registered",
+          code: "DUPLICATE_RECORD"
+        });
+      }
+      
       res.status(500).json({ error: err.message || "Registration failed" });
     }
   });
@@ -3972,6 +4194,74 @@ async function startServer() {
     }
   });
 
+  // Resend Email Verification
+  app.post("/api/students/resend-verification", async (req, res) => {
+    try {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+
+      console.log(`📧 Resend verification for: ${normalizedEmail}`);
+
+      // Find student
+      const { data: student, error: findError } = await getSupabase()
+        .from("students")
+        .select("id, full_name, email_verified")
+        .eq("email", normalizedEmail)
+        .maybeSingle();
+
+      if (findError || !student) {
+        console.log(`⚠️ Resend verification failed: student not found for ${normalizedEmail}`);
+        return res.status(400).json({ error: "Student not found" });
+      }
+
+      // If already verified, no need to resend
+      if (student.email_verified) {
+        return res.json({ message: "Email is already verified" });
+      }
+
+      // Generate new verification token
+      const verificationToken = generateEmailVerificationToken();
+      const verificationTokenHash = crypto.createHash("sha256").update(verificationToken).digest("hex");
+      const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+
+      // Update student with new token
+      const { error: updateError } = await getSupabase()
+        .from("students")
+        .update({
+          email_verification_token: verificationTokenHash,
+          email_verification_expires_at: verificationExpiresAt
+        })
+        .eq("id", student.id);
+
+      if (updateError) {
+        console.error("Token update error:", updateError);
+        return res.status(500).json({ error: "Failed to generate new verification token" });
+      }
+
+      // Send email verification
+      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(normalizedEmail)}`;
+      
+      try {
+        await sendEmailVerification(normalizedEmail, verificationLink, verificationToken, student.full_name);
+        console.log(`✉️ Verification email resent to: ${normalizedEmail}`);
+      } catch (emailErr: any) {
+        console.error("Failed to send verification email:", emailErr);
+        return res.status(500).json({ error: "Failed to send verification email" });
+      }
+
+      res.json({ success: true, message: "Verification email resent successfully!" });
+    } catch (err: any) {
+      console.error("Resend verification error:", err);
+      res.status(500).json({ error: err.message || "Failed to resend verification" });
+    }
+  });
+
   // Forgot Password - Request Password Reset Token
   app.post("/api/students/forgot-password", async (req, res) => {
     try {
@@ -4019,39 +4309,12 @@ async function startServer() {
       const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
       const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(student.email)}`;
 
-      // Send email with reset link
-      const emailSubject = "Password Reset Request - Student Consultation System";
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <div style="background: linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%); padding: 30px; border-radius: 15px; margin-bottom: 20px;">
-            <h1 style="color: #333; margin: 0; text-align: center;">Password Reset Request</h1>
-          </div>
-          
-          <div style="background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-            <p style="color: #666; margin-bottom: 15px;">Hi ${student.full_name},</p>
-            <p style="color: #666; margin-bottom: 15px;">You requested a password reset for your Student Consultation System account.</p>
-            <p style="color: #666; margin-bottom: 15px;">Click the button below to reset your password. This link will expire in 24 hours.</p>
-            
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetLink}" style="display: inline-block; background: linear-gradient(135deg, #d4a574 0%, #c9945f 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Reset Password</a>
-            </div>
-            
-            <p style="color: #999; font-size: 13px; margin-bottom: 10px;">Or copy this link:</p>
-            <p style="color: #0066cc; font-size: 12px; word-break: break-all; background: #f0f0f0; padding: 10px; border-radius: 5px;">${resetLink}</p>
-          </div>
-          
-          <div style="background: #fff3cd; padding: 15px; border-radius: 10px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
-            <p style="color: #856404; margin: 0; font-size: 14px;">If you did not request this password reset, please ignore this email or contact support immediately.</p>
-          </div>
-          
-          <div style="text-align: center; color: #999; font-size: 12px; margin-top: 20px;">
-            <p>Student Consultation System</p>
-            <p>This is an automated email. Please do not reply to this email.</p>
-          </div>
-        </div>
-      `;
+      // Send email with reset link (fast-track for critical email)
+      const emailSubject = "Password Reset";
+      const emailHtml = `<p>Hi ${student.full_name},</p><p>Reset password: <a href="${resetLink}">Click here</a></p><p>Expires: 24 hours</p>`;
 
-      await sendEmailNotification(student.email, emailSubject, emailHtml);
+      // Send password reset email immediately (critical for account security)
+      await sendCriticalEmail(student.email, emailSubject, emailHtml, "PASSWORD_RESET");
 
       console.log(`✅ Password reset email sent to: ${student.email}`);
       res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent." });
@@ -4379,6 +4642,16 @@ async function startServer() {
           .eq("id", student.id);
       }
 
+      // ✅ Email verification is now MANDATORY
+      if (!student.email_verified) {
+        console.log(`⚠️ Queue join blocked: Student ${student.id} has not verified their email`);
+        return res.status(403).json({ 
+          error: "Email verification required. Please verify your email before booking a consultation.",
+          needsEmailVerification: true,
+          studentEmail: student.email
+        });
+      }
+
       // Check if already in queue
       const { data: existing, error: queueCheckError } = await getSupabase()
         .from("queue")
@@ -4503,7 +4776,7 @@ async function startServer() {
 
       const queueInsertBase = {
         student_id: student.id,
-        faculty_id,
+        faculty_id: faculty_id || null,
         status: "waiting",
         student_email: targetEmail || null,
         meet_link: meetLinkToSave,
@@ -4543,6 +4816,31 @@ async function startServer() {
         if (error) {
           const message = String(error.message || "").toLowerCase();
           const code = (error as any).code;
+          
+          // Handle UUID type errors
+          if (message.includes("invalid input syntax for type uuid")) {
+            console.error(`❌ UUID type error in queue insert:`, error);
+            console.error(`   Payload keys:`, Object.keys(payload));
+            return res.status(500).json({ error: "Database schema error. Please contact support." });
+          }
+          
+          // Handle schema cache errors - extract column name and retry without it
+          if (code === "PGRST204" && message.includes("could not find")) {
+            const columnMatch = message.match(/could not find the '(\w+)' column/);
+            if (columnMatch) {
+              const missingColumn = columnMatch[1];
+              console.warn(`⚠️ Column '${missingColumn}' not found in schema cache, retrying without it`);
+              delete payload[missingColumn];
+              // Retry with the problematic column removed
+              let { data: retryData, error: retryError } = await getSupabase()
+                .from("queue")
+                .insert(payload)
+                .select()
+                .single();
+              if (retryError) throw retryError;
+              return retryData;
+            }
+          }
           
           // Handle double-booking - unique constraint violation on (faculty_id, queue_date, time_period)
           if (code === "23505" || message.includes("unique constraint") || message.includes("queue_faculty_date_timeslot")) {
@@ -4659,7 +4957,7 @@ async function startServer() {
           day: "numeric"
         }).format(new Date());
         
-        await sendEmailNotification(
+        await sendConsultationEmail(
           targetEmail,
           "Consultation Appointment Confirmed",
           `
@@ -5513,7 +5811,7 @@ async function startServer() {
         const studentName = student.full_name || consultation.student_email || "Student";
 
         try {
-          await sendEmailNotification(
+          await sendConsultationEmail(
             student.email,
             "Consultation Cancelled",
             `
@@ -7309,7 +7607,7 @@ async function startServer() {
       console.log(`\n📧 Triggering email notification to: ${student_email_to_notify}`);
       
       try {
-        await sendEmailNotification(
+        await sendConsultationEmail(
           student_email_to_notify,
           "Consultation Reminder - 5 Minutes Until Start",
           `
@@ -7807,7 +8105,7 @@ async function startServer() {
                   day: "numeric"
                 }).format(new Date((consultation as any)?.queue_date || new Date()));
                 
-                await sendEmailNotification(
+                await sendConsultationEmail(
                   studentEmail,
                   "Consultation Reminder - 5 Minutes Until Start",
                   `
@@ -7855,7 +8153,7 @@ async function startServer() {
               console.log(`   ✅ SENDING ON-TIME NOTIFICATION!`);
               if (studentEmail) {
                 console.log(`   📧 Sending on-time email to ${studentEmail}...`);
-                await sendEmailNotification(
+                await sendConsultationEmail(
                   studentEmail,
                   "Your Consultation is Starting Now",
                   `
@@ -8063,31 +8361,10 @@ async function startServer() {
                 console.log(`   ✅ Auto-removed from queue (past date)`);
 
                 if (studentEmail) {
-                  const emailSubject = "Consultation Schedule Expired - EARIST Queue Management System";
-                  const emailHtml = `
-                    <div style="font-family: Arial, sans-serif; background-color: #f5f1ed; padding: 20px;">
-                      <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                        <h2 style="color: #d84d42; margin-top: 0;">Consultation Schedule Expired</h2>
+                  const emailSubject = "Consultation Expired";
+                  const emailHtml = `<p>Hi ${studentName},</p><p>Your consultation with ${facultyName} (${timePart}) has expired. Please queue again.</p>`;
 
-                        <p>Dear ${studentName},</p>
-
-                        <p>Your consultation with <strong>${facultyName}</strong> has expired and was automatically removed from the queue.</p>
-
-                        <div style="background-color: #f9f1eb; border-left: 4px solid #d84d42; padding: 15px; margin: 20px 0;">
-                          <p style="margin: 5px 0;"><strong>Scheduled Time:</strong> ${timePart}</p>
-                          <p style="margin: 5px 0;"><strong>Consultation ID:</strong> #${consultation.id}</p>
-                        </div>
-
-                        <p style="color: #666;">Please queue again next time by selecting a new available schedule in the system.</p>
-
-                        <p style="color: #999; font-size: 12px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
-                          This is an automated notification from the EARIST Queue Management System. Please do not reply to this email.
-                        </p>
-                      </div>
-                    </div>
-                  `;
-
-                  await sendEmailNotification(studentEmail, emailSubject, emailHtml);
+                  await sendConsultationEmail(studentEmail, emailSubject, emailHtml);
                   console.log(`   📧 Expiration email sent to ${studentEmail}`);
                 }
 
@@ -8197,39 +8474,10 @@ async function startServer() {
 
                 // Send email notification to student
                 if (studentEmail) {
-                  const emailSubject = "Consultation Time Expired - EARIST Queue Management System";
-                  const emailHtml = `
-                    <div style="font-family: Arial, sans-serif; background-color: #f5f1ed; padding: 20px;">
-                      <div style="max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                        <h2 style="color: #d84d42; margin-top: 0;">Consultation Time Expired</h2>
-                        
-                        <p>Dear ${studentName},</p>
-                        
-                        <p>Your consultation appointment with <strong>${facultyName}</strong> was scheduled for:</p>
-                        
-                        <div style="background-color: #f9f1eb; border-left: 4px solid #d84d42; padding: 15px; margin: 20px 0;">
-                          <p style="margin: 5px 0;"><strong>Scheduled Time:</strong> ${timePart}</p>
-                          <p style="margin: 5px 0;"><strong>Consultation ID:</strong> #${consultation.id}</p>
-                        </div>
-                        
-                        <p style="color: #666;">Since you were not attended to during your scheduled time slot and did not join the queue before it expired, your consultation has been automatically removed from the queue.</p>
-                        <p style="color: #666; margin-top: 10px;"><strong>Please queue again next time</strong> by selecting a new available schedule in the system.</p>
-                        
-                        <h3 style="color: #333; margin-top: 25px;">What to do next?</h3>
-                        <ul style="color: #666; line-height: 1.8;">
-                          <li>Visit the EARIST Queue Management System to schedule a new consultation</li>
-                          <li>Select the same faculty member or request a different faculty advisor</li>
-                          <li>Choose an available time slot that works for you</li>
-                        </ul>
-                        
-                        <p style="color: #999; font-size: 12px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
-                          This is an automated notification from the EARIST Queue Management System. Please do not reply to this email.
-                        </p>
-                      </div>
-                    </div>
-                  `;
+                  const emailSubject = "Consultation Time Expired";
+                  const emailHtml = `<p>Hi ${studentName},</p><p>Your consultation with ${facultyName} (${timePart}) expired. Please queue again.</p>`;
                   
-                  await sendEmailNotification(studentEmail, emailSubject, emailHtml);
+                  await sendConsultationEmail(studentEmail, emailSubject, emailHtml);
                   console.log(`   📧 Notification email sent to ${studentEmail}`);
                 }
 

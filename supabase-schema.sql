@@ -60,11 +60,22 @@ ALTER TABLE faculty DISABLE ROW LEVEL SECURITY;
 
 -- 3. Create Students Table
 CREATE TABLE IF NOT EXISTS students (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  email TEXT,
-  course TEXT
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_number TEXT UNIQUE,
+  full_name TEXT NOT NULL,
+  name TEXT, -- Deprecated, use full_name
+  email TEXT UNIQUE,
+  course TEXT,
+  pin TEXT,
+  pin_created_at TIMESTAMPTZ,
+  pin_last_changed_at TIMESTAMPTZ,
+  email_verified BOOLEAN DEFAULT FALSE,
+  email_verification_token TEXT,
+  email_verification_expires_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_students_student_number ON students(student_number);
+CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);
+CREATE INDEX IF NOT EXISTS idx_students_email_verified ON students(email_verified);
 ALTER TABLE students DISABLE ROW LEVEL SECURITY;
 
 -- 4. Create Queue Table

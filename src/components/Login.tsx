@@ -49,7 +49,7 @@ export default function Login() {
   const [studentName, setStudentName] = useState("");
   const [studentEmail, setStudentEmail] = useState("");
   const [course, setCourse] = useState("");
-  const [studentPassword, setStudentPassword] = useState("");
+  const [studentPin, setStudentPin] = useState("");
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -341,20 +341,21 @@ export default function Login() {
         name: studentData.name,
         email: studentData.email,
         course: studentData.course,
-        hasPassword: !!studentData.password
+        hasPin: !!studentData.pin
       });
       
-      localStorage.setItem("student_id", studentData.id);
+      // Store student_number as student_id for queue operations
+      localStorage.setItem("student_id", studentData.student_number || studentData.id);
       localStorage.setItem("student_name", studentData.name);
       localStorage.setItem("student_email", studentData.email || "");
       localStorage.setItem("student_course", studentData.course || "");
-      const passwordToStore = (studentData.password || "").trim();
-      console.log(`🔐 Storing password to localStorage: "${passwordToStore}" (length: ${passwordToStore.length})`);
-      localStorage.setItem("student_password", passwordToStore);
+      const pinToStore = (studentData.pin || "").trim();
+      console.log(`🔐 Storing PIN to localStorage: "${pinToStore}" (length: ${pinToStore.length})`);
+      localStorage.setItem("student_pin", pinToStore);
     } else {
       // Manual input - register student to database immediately
-      if (!normalizedIdentifier || !studentName || !studentEmail || !course || !studentPassword) {
-        throw new Error("Please fill in all fields including password.");
+      if (!normalizedIdentifier || !studentName || !studentEmail || !course || !studentPin) {
+        throw new Error("Please fill in all fields including PIN.");
       }
 
       // Register student on the server
@@ -362,11 +363,11 @@ export default function Login() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          student_number: normalizedIdentifier, // Use the identifier they entered
+          student_number: normalizedIdentifier,
           full_name: studentName,
           email: studentEmail,
           course: course,
-          password: studentPassword
+          pin: studentPin
         })
       });
 
@@ -377,12 +378,20 @@ export default function Login() {
 
       const registeredStudent = await registerRes.json();
       
-      // Save to localStorage
-      localStorage.setItem("student_id", registeredStudent.id);
+      // Save to localStorage - use student_number for student_id since that's what backend looks up
+      localStorage.setItem("student_id", registeredStudent.student_number || registeredStudent.id);
       localStorage.setItem("student_name", registeredStudent.name);
       localStorage.setItem("student_email", registeredStudent.email);
       localStorage.setItem("student_course", course);
-      localStorage.setItem("student_password", studentPassword.trim()); // Store password (trimmed)
+      localStorage.setItem("student_pin", studentPin.trim()); // Store PIN (trimmed)
+      
+      // Store email in sessionStorage for email verification screen
+      sessionStorage.setItem("registration_email", registeredStudent.email);
+      
+      // Redirect to email verification page instead of kiosk
+      localStorage.setItem("user_role", "student");
+      navigate("/verify-email");
+      return; // Exit early - don't check queue yet
     }
 
     localStorage.setItem("user_role", "student");
@@ -396,7 +405,7 @@ export default function Login() {
     } else {
       navigate(`/kiosk`);
     }
-  }, [faculty, course, navigate, studentEmail, studentName, studentPassword]);
+  }, [faculty, course, navigate, studentEmail, studentName, studentPin]);
 
   const triggerAutoScanLogin = useCallback(async (rawScannedValue: string) => {
     const scannedValue = rawScannedValue.trim();
@@ -728,11 +737,17 @@ export default function Login() {
                     ))}
                   </select>
                   <input
-                    type="password"
-                    value={studentPassword}
-                    onChange={(e) => setStudentPassword(e.target.value)}
+                    type="text"
+                    inputMode="numeric"
+                    value={studentPin}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setStudentPin(value);
+                    }}
                     disabled={availableFaculty.length === 0}
-                    placeholder="Create Password"
+                    placeholder="Create PIN (4-6 digits)"
+                    maxLength={6}
+                    pattern="\d{4,6}"
                     className="w-full p-5 border-3 rounded-2xl outline-none transition-colors text-2xl font-semibold"
                     style={{
                       borderColor: 'var(--clay-border)',

@@ -42,12 +42,12 @@ export default function KioskView() {
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState<any>(null);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [passwordAttempt, setPasswordAttempt] = useState("");
-  const [passwordError, setPasswordError] = useState("");
-  const [showSetPasswordMode, setShowSetPasswordMode] = useState(false);
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinAttempt, setPinAttempt] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [showSetPinMode, setShowSetPinMode] = useState(false);
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
   
   // Forgot Password State
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
@@ -291,90 +291,90 @@ export default function KioskView() {
       return;
     }
 
-    // Show password confirmation modal
-    setShowPasswordModal(true);
-    setPasswordAttempt("");
-    setPasswordError("");
+    // Show PIN confirmation modal
+    setShowPinModal(true);
+    setPinAttempt("");
+    setPinError("");
   };
 
-  const handlePasswordConfirm = async () => {
-    const storedPassword = safeGetItem("student_password", "").trim();
+  const handlePinConfirm = async () => {
+    const storedPin = safeGetItem("student_pin", "").trim();
     
-    if (!passwordAttempt) {
-      setPasswordError("Please enter your password.");
+    if (!pinAttempt) {
+      setPinError("Please enter your PIN.");
       return;
     }
 
-    console.log(`🔐 Password verification: Stored="${storedPassword}" (len:${storedPassword.length}) vs Entered="${passwordAttempt.trim()}" (len:${passwordAttempt.trim().length})`);
+    console.log(`🔐 PIN verification: Stored="${storedPin}" (len:${storedPin.length}) vs Entered="${pinAttempt.trim()}" (len:${pinAttempt.trim().length})`);
     
-    // Check if student has no password set
-    if (!storedPassword) {
-      console.log(`⚠️ No password found in database for this student`);
-      setPasswordError("No password is set for your account. Please contact the faculty office to set your password.");
+    // Check if student has no PIN set
+    if (!storedPin) {
+      console.log(`⚠️ No PIN found in database for this student`);
+      setPinError("No PIN is set for your account. Please contact the faculty office to set your PIN.");
       return;
     }
 
-    if (passwordAttempt.trim() !== storedPassword) {
-      console.log(`❌ Password mismatch! Expected: "${storedPassword}"`);
-      setPasswordError("Incorrect password. Please try again.");
-      setPasswordAttempt("");
+    if (pinAttempt.trim() !== storedPin) {
+      console.log(`❌ PIN mismatch! Expected: "${storedPin}"`);
+      setPinError("Incorrect PIN. Please try again.");
+      setPinAttempt("");
       return;
     }
 
-    console.log(`✅ Password match!`);
-    // Password is correct, proceed with queue join
-    setShowPasswordModal(false);
-    setPasswordAttempt("");
-    setPasswordError("");
+    console.log(`✅ PIN match!`);
+    // PIN is correct, proceed with queue join
+    setShowPinModal(false);
+    setPinAttempt("");
+    setPinError("");
     await submitQueueJoin();
   };
 
-  const handleSetPassword = async () => {
-    if (!newPassword.trim()) {
-      setPasswordError("Please enter a password.");
+  const handleSetPin = async () => {
+    if (!newPin.trim()) {
+      setPinError("Please enter a PIN.");
       return;
     }
 
-    if (newPassword !== confirmPassword) {
-      setPasswordError("Passwords do not match.");
+    if (newPin !== confirmPin) {
+      setPinError("PINs do not match.");
       return;
     }
 
-    if (newPassword.length < 4) {
-      setPasswordError("Password must be at least 4 characters long.");
+    if (!/^\d{4,6}$/.test(newPin)) {
+      setPinError("PIN must be 4-6 digits.");
       return;
     }
 
     try {
-      const res = await fetch(`/api/students/${studentId}/password`, {
+      const res = await fetch(`/api/students/${studentId}/pin`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: newPassword })
+        body: JSON.stringify({ pin: newPin })
       });
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to set password");
+        throw new Error(data.error || "Failed to set PIN");
       }
 
-      // Store password to localStorage and proceed
-      const trimmedPassword = newPassword.trim();
-      localStorage.setItem("student_password", trimmedPassword);
-      console.log(`✅ Password set successfully: "${trimmedPassword}"`);
+      // Store PIN to localStorage and proceed
+      const trimmedPin = newPin.trim();
+      localStorage.setItem("student_pin", trimmedPin);
+      console.log(`✅ PIN set successfully`);
       
-      setShowSetPasswordMode(false);
-      setShowPasswordModal(false);
-      setNewPassword("");
-      setConfirmPassword("");
-      setPasswordError("");
-      setPasswordAttempt("");
-      
-      // Proceed with queue join
+      setShowSetPinMode(false);
+      setShowPinModal(false);
+      setNewPin("");
+      setConfirmPin("");
+      setPinError("");
+      setPinAttempt("");
       await submitQueueJoin();
     } catch (err: any) {
-      setPasswordError(err.message || "Failed to set password");
+      console.error("Set PIN error:", err);
+      setPinError(err.message);
     }
   };
+
   const handleForgotPassword = async () => {
     // Automatically use the stored student email - no user input needed
     const emailToUse = studentEmail.trim();
@@ -421,7 +421,7 @@ export default function KioskView() {
     setError("");
 
     try {
-      const studentPassword = safeGetItem("student_password", "");
+      const studentPin = safeGetItem("student_pin", "");
       const payload = {
         student_id: studentId,
         faculty_id: selectedFaculty,
@@ -432,7 +432,7 @@ export default function KioskView() {
         purpose: consultationConcern.trim(),
         time_period: selectedDay ? `${selectedDay} ${selectedTimePeriod}` : selectedTimePeriod,
         queue_date: selectedDate,
-        student_password: studentPassword,
+        student_pin: studentPin,
       };
       
       console.log(`📤 Sending queue join request:`, payload);
@@ -754,44 +754,47 @@ export default function KioskView() {
       </main>
 
       {/* Password Confirmation Modal */}
-      {showPasswordModal && (
+      {showPinModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl p-8 sm:p-12 max-w-md w-full space-y-6 card shadow-2xl animate-in fade-in scale-in">
-            {!showSetPasswordMode ? (
+            {!showSetPinMode ? (
               <>
                 <h2 className="text-3xl font-bold text-center" style={{ color: 'var(--clay-text-primary)' }}>
-                  Confirm Password
+                  Confirm PIN
                 </h2>
                 <p className="text-lg text-center" style={{ color: 'var(--clay-text-secondary)' }}>
-                  Please enter your password to confirm your consultation booking.
+                  Please enter your PIN to confirm your consultation booking.
                 </p>
                 
                 <div className="space-y-4">
                   <input
-                    type="password"
-                    value={passwordAttempt}
+                    type="text"
+                    inputMode="numeric"
+                    value={pinAttempt}
                     onChange={(e) => {
-                      setPasswordAttempt(e.target.value);
-                      setPasswordError("");
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setPinAttempt(value);
+                      setPinError("");
                     }}
                     onKeyPress={(e) => {
                       if (e.key === 'Enter') {
-                        handlePasswordConfirm();
+                        handlePinConfirm();
                       }
                     }}
-                    placeholder="Enter your password"
+                    placeholder="Enter your PIN (4-6 digits)"
+                    maxLength={6}
                     className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
                     style={{
-                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      borderColor: pinError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
                       background: 'var(--clay-bg-secondary)',
                       color: 'var(--clay-text-primary)'
                     }}
                     autoFocus
                   />
-                  {passwordError && (
+                  {pinError && (
                     <div className="space-y-4">
                       <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
-                        {passwordError}
+                        {pinError}
                       </p>
                       <button
                         type="button"
@@ -803,7 +806,7 @@ export default function KioskView() {
                         className="w-full py-2 px-4 text-lg font-semibold transition-colors hover:opacity-80"
                         style={{ color: 'var(--clay-accent-warm)', cursor: 'pointer', background: 'transparent' }}
                       >
-                        Forgot Password?
+                        Forgot PIN?
                       </button>
                     </div>
                   )}
@@ -812,10 +815,10 @@ export default function KioskView() {
                 <div className="flex gap-4 pt-4">
                   <button
                     onClick={() => {
-                      setShowPasswordModal(false);
-                      setPasswordAttempt("");
-                      setPasswordError("");
-                      setShowSetPasswordMode(false);
+                      setShowPinModal(false);
+                      setPinAttempt("");
+                      setPinError("");
+                      setShowSetPinMode(false);
                     }}
                     className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all"
                     style={{
@@ -826,8 +829,8 @@ export default function KioskView() {
                     Cancel
                   </button>
                   <button
-                    onClick={handlePasswordConfirm}
-                    disabled={!passwordAttempt}
+                    onClick={handlePinConfirm}
+                    disabled={!pinAttempt}
                     className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary"
                   >
                     Confirm
@@ -837,52 +840,58 @@ export default function KioskView() {
             ) : (
               <>
                 <h2 className="text-3xl font-bold text-center" style={{ color: 'var(--clay-text-primary)' }}>
-                  Set Password
+                  Set PIN
                 </h2>
                 <p className="text-lg text-center" style={{ color: 'var(--clay-text-secondary)' }}>
-                  Create a password for your account.
+                  Create a PIN (4-6 digits) for your account.
                 </p>
                 
                 <div className="space-y-4">
                   <input
-                    type="password"
-                    value={newPassword}
+                    type="text"
+                    inputMode="numeric"
+                    value={newPin}
                     onChange={(e) => {
-                      setNewPassword(e.target.value);
-                      setPasswordError("");
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setNewPin(value);
+                      setPinError("");
                     }}
-                    placeholder="Create Password"
+                    placeholder="Create PIN (4-6 digits)"
+                    maxLength={6}
                     className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
                     style={{
-                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      borderColor: pinError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
                       background: 'var(--clay-bg-secondary)',
                       color: 'var(--clay-text-primary)'
                     }}
                     autoFocus
                   />
                   <input
-                    type="password"
-                    value={confirmPassword}
+                    type="text"
+                    inputMode="numeric"
+                    value={confirmPin}
                     onChange={(e) => {
-                      setConfirmPassword(e.target.value);
-                      setPasswordError("");
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setConfirmPin(value);
+                      setPinError("");
                     }}
                     onKeyPress={(e) => {
                       if (e.key === 'Enter') {
-                        handleSetPassword();
+                        handleSetPin();
                       }
                     }}
-                    placeholder="Confirm Password"
+                    placeholder="Confirm PIN"
+                    maxLength={6}
                     className="w-full p-4 border-3 rounded-2xl outline-none text-xl font-semibold transition-colors"
                     style={{
-                      borderColor: passwordError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
+                      borderColor: pinError ? 'var(--clay-accent-soft-coral)' : 'var(--clay-border)',
                       background: 'var(--clay-bg-secondary)',
                       color: 'var(--clay-text-primary)'
                     }}
                   />
-                  {passwordError && (
+                  {pinError && (
                     <p className="text-lg font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>
-                      {passwordError}
+                      {pinError}
                     </p>
                   )}
                 </div>
@@ -890,11 +899,11 @@ export default function KioskView() {
                 <div className="flex gap-4 pt-4">
                   <button
                     onClick={() => {
-                      setShowPasswordModal(false);
-                      setNewPassword("");
-                      setConfirmPassword("");
-                      setPasswordError("");
-                      setShowSetPasswordMode(false);
+                      setShowPinModal(false);
+                      setNewPin("");
+                      setConfirmPin("");
+                      setPinError("");
+                      setShowSetPinMode(false);
                     }}
                     className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all"
                     style={{
@@ -905,11 +914,11 @@ export default function KioskView() {
                     Cancel
                   </button>
                   <button
-                    onClick={handleSetPassword}
-                    disabled={!newPassword || !confirmPassword}
+                    onClick={handleSetPin}
+                    disabled={!newPin || !confirmPin}
                     className="flex-1 py-4 px-6 text-lg font-bold rounded-2xl transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary"
                   >
-                    Set Password
+                    Set PIN
                   </button>
                 </div>
               </>
