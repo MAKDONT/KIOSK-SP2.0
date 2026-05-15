@@ -4069,7 +4069,7 @@ async function startServer() {
       }
 
       // Send email verification
-      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      const baseUrl = (process.env.APP_BASE_URL || `http://${req.get("host")}`).replace(/\/$/, "");
       const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(newStudent.email)}`;
       
       try {
@@ -4244,7 +4244,7 @@ async function startServer() {
       }
 
       // Send email verification
-      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      const baseUrl = (process.env.APP_BASE_URL || `http://${req.get("host")}`).replace(/\/$/, "");
       const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(normalizedEmail)}`;
       
       try {
@@ -4305,8 +4305,8 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to generate reset token" });
       }
 
-      // Generate reset link
-      const baseUrl = process.env.APP_BASE_URL || `http://${req.get("host")}`;
+      // Generate reset link with no trailing slash
+      const baseUrl = (process.env.APP_BASE_URL || `http://${req.get("host")}`).replace(/\/$/, "");
       const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(student.email)}`;
 
       // Send email with reset link (fast-track for critical email)
