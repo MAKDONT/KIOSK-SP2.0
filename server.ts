@@ -238,6 +238,8 @@ async function sendCriticalEmailFastTrack(to: string, subject: string, html: str
       console.log(`🔐 FAST-TRACK [${emailType}] HIGH PRIORITY: ${to} (${latency}ms)`);
     } else if (emailType === "FACULTY_NOTIFICATION") {
       console.log(`👨‍🏫 FAST-TRACK [${emailType}] HIGH PRIORITY: ${to} (${latency}ms)`);
+    } else if (emailType === "EARLY_START") {
+      console.log(`⏰ FAST-TRACK [${emailType}] HIGH PRIORITY: ${to} (${latency}ms)`);
     } else {
       console.log(`⚡ FAST-TRACK [${emailType}]: ${to} (${latency}ms)`);
     }
@@ -251,7 +253,7 @@ async function sendCriticalEmailFastTrack(to: string, subject: string, html: str
 async function sendCriticalEmail(to: string, subject: string, html: string, emailType: string) {
   /**
    * Send critical emails with fast-track, then fallback to queue
-   * PIN_RESET and FACULTY_NOTIFICATION emails are always marked as HIGH PRIORITY
+   * PIN_RESET, FACULTY_NOTIFICATION, and EARLY_START emails are always marked as HIGH PRIORITY
    */
   const success = await sendCriticalEmailFastTrack(to, subject, html, emailType);
   if (!success) {
@@ -261,6 +263,8 @@ async function sendCriticalEmail(to: string, subject: string, html: string, emai
       console.log(`🔐 PIN_RESET email queued as HIGH PRIORITY for: ${to}`);
     } else if (emailType === "FACULTY_NOTIFICATION") {
       console.log(`👨‍🏫 FACULTY_NOTIFICATION email queued as HIGH PRIORITY for: ${to}`);
+    } else if (emailType === "EARLY_START") {
+      console.log(`⏰ EARLY_START email queued as HIGH PRIORITY for: ${to}`);
     }
   }
 }
@@ -5302,10 +5306,10 @@ async function startServer() {
             
             // Slot is past if:
             // 1. Its date is before today (entire day passed), OR
-            // 2. Its date is today AND its START time has already passed
+            // 2. Its date is today AND its START time has already passed (use < not <= to allow current time slots)
             const isPast = isSlotDateBeforeToday || 
                           (isSlotToday && (slotStartHourInPHT < currentHourInPHT || 
-                           (slotStartHourInPHT === currentHourInPHT && slotStartMinInPHT <= currentMinInPHT)));
+                           (slotStartHourInPHT === currentHourInPHT && slotStartMinInPHT < currentMinInPHT)));
             
             // Format timeString using date-fns-tz
             const timeString = formatInTimeZone(slotStart, APP_TIMEZONE, "hh:mm a") + " - " + formatInTimeZone(slotEnd, APP_TIMEZONE, "hh:mm a");
@@ -5663,7 +5667,7 @@ async function startServer() {
 
       const { data: consultation, error: fetchError } = await getSupabase()
         .from("queue")
-        .select(`*, students(full_name, student_number), faculty(email)`)
+        .select(`*, students(full_name, student_number, email), faculty(email)`)
         .eq("id", consultationId)
         .single();
 
@@ -5798,6 +5802,97 @@ async function startServer() {
       const parts = consultation.meet_link ? consultation.meet_link.split('|') : [];
       const actual_link = parts.length > 1 ? parts[1] : (parts.length === 1 && parts[0]?.startsWith('http') ? parts[0] : null);
       const final_email_link = status === "serving" ? (finalMeetLink || actual_link) : actual_link;
+
+      // ===== EARLY START NOTIFICATION =====
+      // If faculty starts the consultation BEFORE scheduled time, notify student immediately
+      if (status === "serving") {
+        try {
+          const studentEmail = (consultation as any)?.students?.email;
+          const studentName = (consultation as any)?.students?.full_name || "Student";
+          const facultyName = consultation.faculty_name || "Faculty";
+          
+          // Parse scheduled start time from meet_link
+          // Format: "Saturday 09:00 AM - 09:15 AM|https://meet.google.com/..." or "Saturday 09:00 AM - 09:15 AM"
+          const timePart = parts[0] || ""; // e.g., "Saturday 09:00 AM - 09:15 AM"
+          
+          if (timePart && studentEmail) {
+            // Extract hour and minute from timeString
+            const timeMatch = timePart.match(/(\d{1,2}):(\d{2})\s(AM|PM)/i);
+            if (timeMatch) {
+              let scheduledHour = parseInt(timeMatch[1], 10);
+              const scheduledMin = parseInt(timeMatch[2], 10);
+              const meridiem = timeMatch[3].toUpperCase();
+              
+              // Convert to 24-hour format
+              if (meridiem === 'PM' && scheduledHour !== 12) {
+                scheduledHour += 12;
+              } else if (meridiem === 'AM' && scheduledHour === 12) {
+                scheduledHour = 0;
+              }
+              
+              // Get current time in APP_TIMEZONE
+              const now = new Date();
+              const currentTimeInPHT = formatInTimeZone(now, APP_TIMEZONE, "HH:mm:ss");
+              const [currentHourStr, currentMinStr] = currentTimeInPHT.split(":");
+              const currentHour = parseInt(currentHourStr, 10);
+              const currentMin = parseInt(currentMinStr, 10);
+              
+              // Check if current time is BEFORE scheduled time
+              const isEarlyStart = currentHour < scheduledHour || 
+                                   (currentHour === scheduledHour && currentMin < scheduledMin);
+              
+              if (isEarlyStart) {
+                console.log(`⏰ [EARLY START] Faculty started consultation BEFORE scheduled time!`);
+                console.log(`   Scheduled: ${scheduledHour}:${String(scheduledMin).padStart(2, '0')}`);
+                console.log(`   Current: ${currentHour}:${String(currentMin).padStart(2, '0')}`);
+                console.log(`   📧 Sending early start notification to student: ${studentEmail}`);
+                
+                // Send email to student about early start (HIGH PRIORITY)
+                await sendCriticalEmail(
+                  studentEmail,
+                  "Your Consultation is Starting Early!",
+                  `
+                  <h2>Your Consultation is Starting Early!</h2>
+                  <p>Hi ${studentName},</p>
+                  <p><strong>Great news!</strong> Your scheduled consultant is ready and starting your consultation early.</p>
+                  <p><strong>Scheduled time:</strong> ${timePart}</p>
+                  <p><strong>Actual start time:</strong> Now (${currentHour}:${String(currentMin).padStart(2, '0')})</p>
+                  <p>Please join the meeting immediately using the link below.</p>
+                  <p><strong>Meeting Link:</strong> <a href="${final_email_link}">${final_email_link}</a></p>
+                  <p>If you're not ready, you can still join when you're available. Thank you for your flexibility!</p>
+                  <br/>
+                  <p>Best regards,<br/>Consultation System</p>
+                  `,
+                  "EARLY_START"
+                );
+                console.log(`✅ Early start email sent to student (HIGH PRIORITY)`);
+                
+                // Broadcast early start notification to student dashboard
+                broadcast("consultation_early_start", {
+                  consultation_id: consultationId,
+                  student_id: consultation.student_id,
+                  message: "Your consultation is starting early!",
+                  scheduled_time: timePart,
+                  current_time: `${currentHour}:${String(currentMin).padStart(2, '0')}`,
+                  meet_link: final_email_link
+                });
+                console.log(`🔔 Early start broadcast sent to student dashboard`);
+                
+                // Log audit event
+                await logAudit("consultation_early_start_notification_sent", {
+                  consultation_id: consultationId,
+                  student_id: consultation.student_id,
+                  student_email: studentEmail,
+                  scheduled_time: timePart,
+                  actual_start_time: `${currentHour}:${String(currentMin).padStart(2, '0')}`
+                });
+              }
+            }
+          }
+        } catch (earlyNotifyErr) {
+          console.error(`❌ Error sending early start notification:`, earlyNotifyErr instanceof Error ? earlyNotifyErr.message : String(earlyNotifyErr));
+        }
+      }
 
       console.log(`✅ Queue Status Updated - ID: ${consultationId}, Status: ${status}`);
 
