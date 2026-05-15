@@ -3917,7 +3917,7 @@ async function startServer() {
       // Try lookup by UUID ID first
       const { data: idData, error: idError } = await getSupabase()
         .from("students")
-        .select("id, full_name, email, course, student_number")
+        .select("id, full_name, email, course, student_number, pin")
         .eq("id", lookupValue)
         .maybeSingle();
       
@@ -3928,7 +3928,8 @@ async function startServer() {
           student_number: idData.student_number,
           name: idData.full_name,
           email: idData.email,
-          course: idData.course || ""
+          course: idData.course || "",
+          pin: idData.pin || ""
         });
       }
       
@@ -3936,7 +3937,7 @@ async function startServer() {
       console.log(`🔄 Trying student_number lookup for: ${lookupValue}`);
       const { data: numberData } = await getSupabase()
         .from("students")
-        .select("id, full_name, email, course, student_number")
+        .select("id, full_name, email, course, student_number, pin")
         .eq("student_number", lookupValue)
         .maybeSingle();
       
@@ -3947,7 +3948,8 @@ async function startServer() {
           student_number: numberData.student_number,
           name: numberData.full_name,
           email: numberData.email,
-          course: numberData.course || ""
+          course: numberData.course || "",
+          pin: numberData.pin || ""
         });
       }
       
@@ -3955,7 +3957,7 @@ async function startServer() {
       console.log(`🔄 Trying email lookup for: ${lookupValue}`);
       const { data: emailData } = await getSupabase()
         .from("students")
-        .select("id, full_name, email, course, student_number")
+        .select("id, full_name, email, course, student_number, pin")
         .eq("email", lookupValue)
         .maybeSingle();
       
@@ -3966,7 +3968,8 @@ async function startServer() {
           student_number: emailData.student_number,
           name: emailData.full_name,
           email: emailData.email,
-          course: emailData.course || ""
+          course: emailData.course || "",
+          pin: emailData.pin || ""
         });
       }
       
@@ -4124,6 +4127,80 @@ async function startServer() {
       }
       
       res.status(500).json({ error: err.message || "Registration failed" });
+    }
+  });
+
+  // Verify Student PIN
+  app.post("/api/students/:id/verify-pin", async (req, res) => {
+    try {
+      const { pin } = req.body;
+      const lookupValue = req.params.id.trim();
+
+      console.log(`🔐 PIN Verification Request: lookupValue="${lookupValue}"`);
+
+      if (!pin) {
+        return res.status(400).json({ error: "PIN is required" });
+      }
+
+      // Try lookup by UUID ID first
+      let student = null;
+      const { data: idData, error: idError } = await getSupabase()
+        .from("students")
+        .select("id, student_number, pin")
+        .eq("id", lookupValue)
+        .maybeSingle();
+
+      if (idError) {
+        console.error(`   UUID lookup error:`, idError);
+      }
+      if (idData) {
+        console.log(`   ✅ Found by UUID ID`);
+        student = idData;
+      } else {
+        console.log(`   ❌ UUID lookup returned nothing`);
+        // Try lookup by student_number
+        console.log(`   🔄 Trying student_number lookup...`);
+        const { data: numberData, error: numberError } = await getSupabase()
+          .from("students")
+          .select("id, student_number, pin")
+          .eq("student_number", lookupValue)
+          .maybeSingle();
+
+        if (numberError) {
+          console.error(`   Student_number lookup error:`, numberError);
+        }
+        if (numberData) {
+          console.log(`   ✅ Found by student_number`);
+          student = numberData;
+        } else {
+          console.log(`   ❌ Student_number lookup returned nothing`);
+        }
+      }
+
+      if (!student) {
+        console.error(`❌ PIN Verification FAILED: Student not found for lookup value: "${lookupValue}"`);
+        return res.status(404).json({ error: "Student not found" });
+      }
+
+      // Check if student has a PIN set
+      if (!student.pin) {
+        console.error(`⚠️ PIN Verification FAILED: No PIN set for student: ${lookupValue}`);
+        return res.status(400).json({ error: "No PIN is set for your account" });
+      }
+
+      // Verify the PIN
+      const isValid = verifyPIN(pin.trim(), student.pin);
+
+      if (!isValid) {
+        console.log(`❌ PIN Verification FAILED: Incorrect PIN for student: ${lookupValue}`);
+        return res.status(401).json({ error: "Incorrect PIN" });
+      }
+
+      console.log(`✅ PIN Verification SUCCESS for student: ${lookupValue}`);
+      res.json({ success: true, message: "PIN verified" });
+    } catch (err: any) {
+      console.error("PIN verification error:", err);
+      res.status(500).json({ error: err.message || "Failed to verify PIN" });
     }
   });
 
@@ -4406,12 +4483,15 @@ async function startServer() {
         return res.status(400).json({ error: "PIN reset link has expired. Please request a new one." });
       }
 
+      // Hash the new PIN (same as registration)
+      const pinHash = hashPIN(trimmedPin);
+
       // Update PIN and clear reset token
       const { error: updateError } = await getSupabase()
         .from("students")
         .update({
-          password: trimmedPin,
-          password_last_changed_at: new Date().toISOString(),
+          pin: pinHash,
+          pin_last_changed_at: new Date().toISOString(),
           password_reset_token: null,
           password_reset_expires_at: null
         })
@@ -4479,10 +4559,14 @@ async function startServer() {
         });
       }
 
-      // Check if any faculty has today's availability slots configured
-      // Faculty with availability slots are shown on kiosk regardless of their current status
-      // This allows students to see and queue for faculty even during consultations
-      const todayDay = getCurrentAppWeekday();
+      // Check if any faculty has availability slots configured for the requested booking date
+      // For advance bookings, check if faculty have slots for that specific day of the week
+      const bookingDate = new Date(queueDateToUse);
+      const bookingFormatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: APP_TIMEZONE,
+        weekday: "long",
+      });
+      const bookingDay = bookingFormatter.format(bookingDate);
       
       let hasFacultyWithAvailabilitySlots = false;
       
@@ -4491,10 +4575,11 @@ async function startServer() {
           // Try to parse full_name as availability JSON (if it's been set via /api/faculty/:id/availability)
           const parsed = JSON.parse(faculty.full_name || "[]");
           if (Array.isArray(parsed) && parsed.length > 0) {
-            // Check if this faculty has a slot for today
-            const todaySlot = parsed.find((slot: any) => slot?.day === todayDay);
-            if (todaySlot) {
+            // Check if this faculty has a slot for the requested booking day
+            const bookingSlot = parsed.find((slot: any) => slot?.day === bookingDay);
+            if (bookingSlot) {
               hasFacultyWithAvailabilitySlots = true;
+              console.log(`✅ Faculty ${faculty.id} has availability on ${bookingDay}`);
               break;
             }
           }
@@ -4504,10 +4589,10 @@ async function startServer() {
         }
       }
 
-      // If no faculty have any availability slots configured, prevent queueing
+      // If no faculty have any availability slots configured for the booking date, prevent queueing
       if (!hasFacultyWithAvailabilitySlots) {
         return res.status(503).json({ 
-          error: "No faculty members have availability slots configured for today. Please try again later." 
+          error: `No faculty members have availability slots configured for ${bookingDay} (${queueDateToUse}). Please try a different date.` 
         });
       }
 
@@ -7998,6 +8083,7 @@ async function startServer() {
   // SCHEDULER: Send notification at 5-7 mins (student email) and at consultation time (all)
   // ==========================================
   const sentAdvanceEmails = new Set<string>(); // Track 5-7 minute student advance emails
+  const sentAdvanceFacultyEmails = new Set<string>(); // Track 15-minute faculty advance emails
   const sentOnTimeNotifications = new Set<string>(); // Track on-time emails/broadcasts
 
   // Helper to get current time in app timezone
@@ -8022,7 +8108,7 @@ async function startServer() {
         const { data: waitingConsultations, error: fetchError } = await retryWithBackoff(async () => {
           return await getSupabase()
             .from("queue")
-            .select("id, student_id, student_email, meet_link, faculty_id, queue_date, students(full_name, email)")
+            .select("id, student_id, student_email, meet_link, faculty_id, queue_date, students(full_name, email), faculty(id, name, email)")
             .in("status", ["waiting", "serving", "ongoing"]);
         }, 2, 500);
 
@@ -8047,9 +8133,12 @@ async function startServer() {
           const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
           const studentName = (consultation as any)?.students?.full_name || "Student";
           const facultyId = consultation.faculty_id;
+          const facultyEmail = (consultation as any)?.faculty?.email;
+          const facultyName = (consultation as any)?.faculty?.name || "Faculty";
 
           console.log(`\n📌 Checking consultation ${consultation.id}:`);
           console.log(`   Student: ${studentName} (${studentEmail})`);
+          console.log(`   Faculty: ${facultyName} (${facultyEmail || 'no email'})`);
           console.log(`   Meet Link: ${consultation.meet_link ? "YES" : "NO"}`);
 
           // Parse meet_link: format is "HH:MM-HH:MM|https://meet.google.com/xxx"
@@ -8197,11 +8286,59 @@ async function startServer() {
               }
             }
 
+            // === ADVANCE EMAIL: Send to FACULTY at 15 minutes before ===
+            if (minutesUntilStart >= 14 && minutesUntilStart <= 16 && !sentAdvanceFacultyEmails.has(consultation.id)) {
+              console.log(`   ✅ SENDING 15-MINUTE ADVANCE EMAIL TO FACULTY`);
+              if (facultyEmail) {
+                console.log(`   📧 Sending advance reminder to faculty: ${facultyEmail}...`);
+                const consultationDate = new Intl.DateTimeFormat("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric"
+                }).format(new Date((consultation as any)?.queue_date || new Date()));
+                
+                await sendFacultyNotificationEmail(
+                  facultyEmail,
+                  "Consultation Reminder - 15 Minutes Until Start",
+                  `
+                  <h2>Consultation Reminder</h2>
+                  <p>Hi ${facultyName},</p>
+                  <p><strong>Your consultation is starting in 15 minutes!</strong></p>
+                  <p><strong>Student:</strong> ${studentName}</p>
+                  <p><strong>Date:</strong> ${consultationDate}</p>
+                  <p><strong>Time:</strong> ${timePart}</p>
+                  <p>Please prepare and be ready to join the consultation.</p>
+                  <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <br/>
+                  <p>Best regards,<br/>Consultation System</p>
+                  `
+                );
+                console.log(`   ✅ Advance email sent to faculty (via SendGrid)`);
+                
+                sentAdvanceFacultyEmails.add(consultation.id);
+                console.log(`   ✅ Faculty advance email sent`);
+
+                // Log audit event for faculty advance email
+                await logAudit("consultation_faculty_advance_reminder_email_sent", {
+                  consultation_id: consultation.id,
+                  faculty_id: facultyId,
+                  faculty_email: facultyEmail,
+                  student_id: consultation.student_id,
+                  student_name: studentName,
+                  minutes_before_start: minutesUntilStart,
+                  scheduled_start_time: timePart,
+                  meet_link: meetLink
+                });
+              }
+            }
+
             // === ON-TIME NOTIFICATION: Send to STUDENT & FACULTY at consultation start time ===
             if (minutesUntilStart >= -1 && minutesUntilStart <= 1 && !sentOnTimeNotifications.has(consultation.id)) {
               console.log(`   ✅ SENDING ON-TIME NOTIFICATION!`);
+              
+              // Send email to STUDENT
               if (studentEmail) {
-                console.log(`   📧 Sending on-time email to ${studentEmail}...`);
+                console.log(`   📧 Sending on-time email to student: ${studentEmail}...`);
                 await sendConsultationEmail(
                   studentEmail,
                   "Your Consultation is Starting Now",
@@ -8217,48 +8354,71 @@ async function startServer() {
                   <p>Best regards,<br/>Consultation System</p>
                   `
                 );
-                console.log(`   ✅ On-time email sent (via SendGrid)`);
-
-                // Send Telegram notification to faculty - consultation is starting now
-                console.log(`   📱 Sending Telegram notification to faculty ${facultyId}: consultation STARTING NOW`);
-                await sendTelegramNotification(
-                  facultyId,
-                  `🔴 <b>CONSULTATION STARTING NOW!</b>\n\n` +
-                  `<b>Student:</b> ${studentName}\n` +
-                  `<b>Time:</b> ${timePart}\n` +
-                  `<b>Status:</b> Ready to start\n\n` +
-                  `Please log in to the system now to begin the consultation.`
-                );
-                console.log(`   ✅ Telegram notification sent to faculty`);
-
-                // Broadcast notification to faculty for this consultation (FACULTY ONLY GETS THIS)
-                console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation STARTING NOW`);
-                broadcast("consultation_starting_soon", {
-                  consultation_id: consultation.id,
-                  faculty_id: facultyId,
-                  student_name: studentName,
-                  student_email: studentEmail,
-                  time_slot: timePart,
-                  minutes_until_start: minutesUntilStart,
-                  meet_link: meetLink
-                });
-
-                sentOnTimeNotifications.add(consultation.id);
-                console.log(`   ✅ On-time email, Telegram & faculty broadcast sent`);
-
-                // Log audit event for on-time notification
-                await logAudit("consultation_reminder_email_sent", {
-                  consultation_id: consultation.id,
-                  student_id: consultation.student_id,
-                  student_email: studentEmail,
-                  faculty_id: facultyId,
-                  minutes_before_start: minutesUntilStart,
-                  scheduled_start_time: timePart,
-                  meet_link: meetLink
-                });
-              } else {
-                console.log(`   ⏭️ No student email to send to`);
+                console.log(`   ✅ On-time email sent to student (via SendGrid)`);
               }
+
+              // Send email to FACULTY
+              if (facultyEmail) {
+                console.log(`   📧 Sending on-time email to faculty: ${facultyEmail}...`);
+                await sendFacultyNotificationEmail(
+                  facultyEmail,
+                  "Consultation Starting Now",
+                  `
+                  <h2>Your Consultation is Starting Now</h2>
+                  <p>Hi ${facultyName},</p>
+                  <p><strong>A consultation is starting now!</strong></p>
+                  <p><strong>Student:</strong> ${studentName}</p>
+                  <p><strong>Time:</strong> ${timePart}</p>
+                  <p>Please join the meeting immediately using the link below.</p>
+                  <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <p>If you have any technical issues, please contact support.</p>
+                  <br/>
+                  <p>Best regards,<br/>Consultation System</p>
+                  `
+                );
+                console.log(`   ✅ On-time email sent to faculty (via SendGrid)`);
+              } else {
+                console.log(`   ⏭️ No faculty email available for notifications`);
+              }
+
+              // Send Telegram notification to faculty - consultation is starting now
+              console.log(`   📱 Sending Telegram notification to faculty ${facultyId}: consultation STARTING NOW`);
+              await sendTelegramNotification(
+                facultyId,
+                `🔴 <b>CONSULTATION STARTING NOW!</b>\n\n` +
+                `<b>Student:</b> ${studentName}\n` +
+                `<b>Time:</b> ${timePart}\n` +
+                `<b>Status:</b> Ready to start\n\n` +
+                `Please log in to the system now to begin the consultation.`
+              );
+              console.log(`   ✅ Telegram notification sent to faculty`);
+
+              // Broadcast notification to faculty for this consultation (FACULTY ONLY GETS THIS)
+              console.log(`   🔔 Broadcasting to faculty ${facultyId}: student consultation STARTING NOW`);
+              broadcast("consultation_starting_soon", {
+                consultation_id: consultation.id,
+                faculty_id: facultyId,
+                student_name: studentName,
+                student_email: studentEmail,
+                time_slot: timePart,
+                minutes_until_start: minutesUntilStart,
+                meet_link: meetLink
+              });
+
+              sentOnTimeNotifications.add(consultation.id);
+              console.log(`   ✅ On-time emails, Telegram & faculty broadcast sent`);
+
+              // Log audit event for on-time notification
+              await logAudit("consultation_reminder_email_sent", {
+                consultation_id: consultation.id,
+                student_id: consultation.student_id,
+                student_email: studentEmail,
+                faculty_id: facultyId,
+                faculty_email: facultyEmail,
+                minutes_before_start: minutesUntilStart,
+                scheduled_start_time: timePart,
+                meet_link: meetLink
+              });
             } else if (minutesUntilStart <= 0) {
               console.log(`   ⏭️ Consultation already started (or in past)`);
             } else if (minutesUntilStart < 5) {

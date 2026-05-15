@@ -298,35 +298,39 @@ export default function KioskView() {
   };
 
   const handlePinConfirm = async () => {
-    const storedPin = safeGetItem("student_pin", "").trim();
-    
     if (!pinAttempt) {
       setPinError("Please enter your PIN.");
       return;
     }
 
-    console.log(`🔐 PIN verification: Stored="${storedPin}" (len:${storedPin.length}) vs Entered="${pinAttempt.trim()}" (len:${pinAttempt.trim().length})`);
-    
-    // Check if student has no PIN set
-    if (!storedPin) {
-      console.log(`⚠️ No PIN found in database for this student`);
-      setPinError("No PIN is set for your account. Please contact the faculty office to set your PIN.");
-      return;
-    }
+    try {
+      // Verify PIN on the server
+      const res = await fetch(`/api/students/${studentId}/verify-pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: pinAttempt.trim() })
+      });
 
-    if (pinAttempt.trim() !== storedPin) {
-      console.log(`❌ PIN mismatch! Expected: "${storedPin}"`);
-      setPinError("Incorrect PIN. Please try again.");
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.log(`❌ PIN verification failed: ${data.error}`);
+        setPinError(data.error || "Incorrect PIN. Please try again.");
+        setPinAttempt("");
+        return;
+      }
+
+      console.log(`✅ PIN verified successfully`);
+      // PIN is correct, proceed with queue join
+      setShowPinModal(false);
       setPinAttempt("");
-      return;
+      setPinError("");
+      await submitQueueJoin();
+    } catch (err: any) {
+      console.error("PIN verification error:", err);
+      setPinError("Error verifying PIN. Please try again.");
+      setPinAttempt("");
     }
-
-    console.log(`✅ PIN match!`);
-    // PIN is correct, proceed with queue join
-    setShowPinModal(false);
-    setPinAttempt("");
-    setPinError("");
-    await submitQueueJoin();
   };
 
   const handleSetPin = async () => {

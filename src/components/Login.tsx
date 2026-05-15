@@ -352,9 +352,7 @@ export default function Login() {
       localStorage.setItem("student_name", studentData.name);
       localStorage.setItem("student_email", studentData.email || "");
       localStorage.setItem("student_course", studentData.course || "");
-      const pinToStore = (studentData.pin || "").trim();
-      console.log(`🔐 Storing PIN to localStorage: "${pinToStore}" (length: ${pinToStore.length})`);
-      localStorage.setItem("student_pin", pinToStore);
+      // Note: PIN verification is now done server-side, don't store PIN locally
     } else {
       // Manual input - register student to database immediately
       if (!normalizedIdentifier || !studentName || !studentEmail || !course || !studentPin) {
@@ -386,7 +384,7 @@ export default function Login() {
       localStorage.setItem("student_name", registeredStudent.name);
       localStorage.setItem("student_email", registeredStudent.email);
       localStorage.setItem("student_course", course);
-      localStorage.setItem("student_pin", studentPin.trim()); // Store PIN (trimmed)
+      // Note: PIN is not stored locally for security; verification is done server-side
       
       // Store email in sessionStorage for email verification screen
       sessionStorage.setItem("registration_email", registeredStudent.email);
