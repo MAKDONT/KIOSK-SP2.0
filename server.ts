@@ -6,6 +6,7 @@ import http from "http";
 import crypto from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import sgMail from "@sendgrid/mail";
+// @ts-expect-error - no types available for node-telegram-bot-api
 import TelegramBot from "node-telegram-bot-api";
 import { google } from "googleapis";
 import multer from "multer";
@@ -211,7 +212,8 @@ async function sendEmailVerification(to: string, verificationLink: string, verif
 async function sendCriticalEmailFastTrack(to: string, subject: string, html: string, emailType: string): Promise<boolean> {
   /**
    * FAST-TRACK: Send critical emails immediately without queue delay
-   * Used for: verification, password reset, urgent notifications
+   * Used for: verification, PIN reset, faculty notifications, consultation updates, urgent notifications
+   * PIN_RESET and FACULTY_NOTIFICATION emails are always treated as high priority
    * Returns: true if successful, false if fallback to queue needed
    */
   if (!process.env.SENDGRID_API_KEY) {
@@ -231,7 +233,14 @@ async function sendCriticalEmailFastTrack(to: string, subject: string, html: str
     const startTime = Date.now();
     await sgMail.send(msg);
     const latency = Date.now() - startTime;
-    console.log(`⚡ FAST-TRACK [${emailType}]: ${to} (${latency}ms)`);
+    
+    if (emailType === "PIN_RESET") {
+      console.log(`🔐 FAST-TRACK [${emailType}] HIGH PRIORITY: ${to} (${latency}ms)`);
+    } else if (emailType === "FACULTY_NOTIFICATION") {
+      console.log(`👨‍🏫 FAST-TRACK [${emailType}] HIGH PRIORITY: ${to} (${latency}ms)`);
+    } else {
+      console.log(`⚡ FAST-TRACK [${emailType}]: ${to} (${latency}ms)`);
+    }
     return true;
   } catch (err: any) {
     console.error(`❌ FAST-TRACK [${emailType}] failed: ${err.message} - falling back to queue`);
@@ -242,11 +251,17 @@ async function sendCriticalEmailFastTrack(to: string, subject: string, html: str
 async function sendCriticalEmail(to: string, subject: string, html: string, emailType: string) {
   /**
    * Send critical emails with fast-track, then fallback to queue
+   * PIN_RESET and FACULTY_NOTIFICATION emails are always marked as HIGH PRIORITY
    */
   const success = await sendCriticalEmailFastTrack(to, subject, html, emailType);
   if (!success) {
-    // Fallback to HIGH priority queue
+    // Fallback to HIGH priority queue (all critical emails)
     await sendEmailNotificationWithPriority(to, subject, html, "high");
+    if (emailType === "PIN_RESET") {
+      console.log(`🔐 PIN_RESET email queued as HIGH PRIORITY for: ${to}`);
+    } else if (emailType === "FACULTY_NOTIFICATION") {
+      console.log(`👨‍🏫 FACULTY_NOTIFICATION email queued as HIGH PRIORITY for: ${to}`);
+    }
   }
 }
 
@@ -924,7 +939,7 @@ async function setupTelegramBot() {
       console.log("✅ Telegram Bot Service Initialized Successfully");
 
       // Handle /start command
-      telegramBot.onText(/\/start/, (msg) => {
+      telegramBot.onText(/\/start/, (msg: any) => {
         const chatId = msg.chat.id;
         const firstName = msg.from?.first_name || "User";
 
@@ -942,7 +957,7 @@ async function setupTelegramBot() {
       });
 
       // Handle any text message
-      telegramBot.on("message", (msg) => {
+      telegramBot.on("message", (msg: any) => {
         const chatId = msg.chat.id;
         if (msg.text && !msg.text.startsWith("/")) {
           if (telegramBot) {
@@ -1171,6 +1186,15 @@ async function sendEmailNotification(to: string, subject: string, html: string) 
  */
 async function sendConsultationEmail(to: string, subject: string, html: string) {
   await sendCriticalEmail(to, subject, html, "CONSULTATION");
+}
+
+/**
+ * Send faculty notification emails with HIGH priority (fast-track)
+ * Used for: important system alerts, schedule changes, account updates
+ * Faculty notifications are treated as critical for operational continuity
+ */
+async function sendFacultyNotificationEmail(to: string, subject: string, html: string) {
+  await sendCriticalEmail(to, subject, html, "FACULTY_NOTIFICATION");
 }
 
 // ===== TELEGRAM NOTIFICATION FUNCTIONS =====
@@ -2271,7 +2295,7 @@ async function startServer() {
   const queueLocks = new Map<string, Promise<void>>();
   const withQueueLock = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     const previous = queueLocks.get(key) || Promise.resolve();
-    let release: (() => void) | null = null;
+    let release: (() => void) = () => {};
     const current = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -2282,7 +2306,7 @@ async function startServer() {
     try {
       return await fn();
     } finally {
-      release?.();
+      release();
       if (queueLocks.get(key) === current) {
         queueLocks.delete(key);
       }
@@ -4262,7 +4286,7 @@ async function startServer() {
     }
   });
 
-  // Forgot Password - Request Password Reset Token
+  // Forgot PIN - Request PIN Reset Token
   app.post("/api/students/forgot-password", async (req, res) => {
     try {
       const { email } = req.body;
@@ -4271,7 +4295,7 @@ async function startServer() {
       }
 
       const normalizedEmail = email.trim().toLowerCase();
-      console.log(`🔐 Password reset requested for email: ${normalizedEmail}`);
+      console.log(`🔐 PIN reset requested for email: ${normalizedEmail}`);
 
       // Find student by email
       const { data: student, error: findError } = await getSupabase()
@@ -4281,9 +4305,9 @@ async function startServer() {
         .single();
 
       if (findError || !student) {
-        console.log(`⚠️ Password reset requested for non-existent email: ${normalizedEmail}`);
+        console.log(`⚠️ PIN reset requested for non-existent email: ${normalizedEmail}`);
         // Return success even if email not found (security best practice)
-        return res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent." });
+        return res.json({ success: true, message: "If an account exists with this email, a PIN reset link has been sent." });
       }
 
       // Generate reset token
@@ -4301,47 +4325,64 @@ async function startServer() {
         .eq("id", student.id);
 
       if (updateError) {
-        console.error("Failed to store reset token:", updateError);
-        return res.status(500).json({ error: "Failed to generate reset token" });
+        console.error("Failed to store PIN reset token:", updateError);
+        return res.status(500).json({ error: "Failed to generate PIN reset token" });
       }
 
-      // Generate reset link with no trailing slash
+      // Generate reset link
+      // Get base URL without trailing slash to prevent double slashes
       const baseUrl = (process.env.APP_BASE_URL || `http://${req.get("host")}`).replace(/\/$/, "");
-      const resetLink = `${baseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(student.email)}`;
+      const resetLink = `${baseUrl}/reset-pin?token=${resetToken}&email=${encodeURIComponent(student.email)}`;
 
-      // Send email with reset link (fast-track for critical email)
-      const emailSubject = "Password Reset";
-      const emailHtml = `<p>Hi ${student.full_name},</p><p>Reset password: <a href="${resetLink}">Click here</a></p><p>Expires: 24 hours</p>`;
+      // Send email with reset link (high priority critical email)
+      const emailSubject = " PIN Reset Request";
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #d32f2f; margin-bottom: 16px;"> PIN Reset Request</h2>
+          <p>Hi ${student.full_name},</p>
+          <p style="margin: 16px 0;">We received a request to reset your Student Consultation System PIN. If you didn't make this request, you can ignore this email.</p>
+          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
+            <a href="${resetLink}" style="background: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block; font-weight: bold; font-size: 16px;">Reset Your PIN</a>
+          </div>
+          <p style="color: #666; font-size: 12px; margin-top: 20px;">⏰ <strong>Important:</strong> This link expires in 24 hours.</p>
+          <p style="color: #666; font-size: 12px;">If you didn't request this, please contact admin immediately.</p>
+        </div>
+      `;
 
-      // Send password reset email immediately (critical for account security)
-      await sendCriticalEmail(student.email, emailSubject, emailHtml, "PASSWORD_RESET");
+      // Send PIN reset email immediately with critical priority
+      await sendCriticalEmail(student.email, emailSubject, emailHtml, "PIN_RESET");
 
-      console.log(`✅ Password reset email sent to: ${student.email}`);
-      res.json({ success: true, message: "If an account exists with this email, a password reset link has been sent." });
+      console.log(`✅ PIN reset email sent to: ${student.email}`);
+      res.json({ success: true, message: "If an account exists with this email, a PIN reset link has been sent." });
     } catch (err: any) {
-      console.error("Forgot password error:", err);
-      res.status(500).json({ error: err.message || "Failed to process password reset request" });
+      console.error("Forgot PIN error:", err);
+      res.status(500).json({ error: err.message || "Failed to process PIN reset request" });
     }
   });
 
-  // Reset Password - Verify Token and Update Password
+  // Reset PIN - Verify Token and Update PIN
   app.post("/api/students/reset-password/:token", async (req, res) => {
     try {
       const { token } = req.params;
       const { password, email } = req.body;
 
       if (!token || !password || !email) {
-        return res.status(400).json({ error: "Token, password, and email are required" });
+        return res.status(400).json({ error: "Token, PIN, and email are required" });
       }
 
       const normalizedEmail = email.trim().toLowerCase();
-      const trimmedPassword = password.trim();
+      const trimmedPin = password.trim();
 
-      if (trimmedPassword.length < 4) {
-        return res.status(400).json({ error: "Password must be at least 4 characters long" });
+      if (trimmedPin.length < 4 || trimmedPin.length > 6) {
+        return res.status(400).json({ error: "PIN must be between 4-6 digits" });
       }
 
-      console.log(`🔐 Processing password reset for: ${normalizedEmail}`);
+      // Check if PIN contains only digits
+      if (!/^\d{4,6}$/.test(trimmedPin)) {
+        return res.status(400).json({ error: "PIN must contain only digits" });
+      }
+
+      console.log(`🔐 Processing PIN reset for: ${normalizedEmail}`);
 
       // Hash the provided token
       const resetTokenHash = crypto.createHash("sha256").update(token).digest("hex");
@@ -4355,21 +4396,21 @@ async function startServer() {
         .single();
 
       if (findError || !student) {
-        console.error(`❌ Invalid or expired reset token for: ${normalizedEmail}`);
-        return res.status(400).json({ error: "Invalid or expired password reset link" });
+        console.error(`❌ Invalid or expired PIN reset token for: ${normalizedEmail}`);
+        return res.status(400).json({ error: "Invalid or expired PIN reset link" });
       }
 
       // Check if token has expired
       if (new Date(student.password_reset_expires_at) < new Date()) {
-        console.error(`❌ Reset token expired for: ${normalizedEmail}`);
-        return res.status(400).json({ error: "Password reset link has expired. Please request a new one." });
+        console.error(`❌ PIN reset token expired for: ${normalizedEmail}`);
+        return res.status(400).json({ error: "PIN reset link has expired. Please request a new one." });
       }
 
-      // Update password and clear reset token
+      // Update PIN and clear reset token
       const { error: updateError } = await getSupabase()
         .from("students")
         .update({
-          password: trimmedPassword,
+          password: trimmedPin,
           password_last_changed_at: new Date().toISOString(),
           password_reset_token: null,
           password_reset_expires_at: null
@@ -4377,15 +4418,15 @@ async function startServer() {
         .eq("id", student.id);
 
       if (updateError) {
-        console.error("Failed to update password:", updateError);
-        return res.status(500).json({ error: "Failed to update password" });
+        console.error("Failed to update PIN:", updateError);
+        return res.status(500).json({ error: "Failed to update PIN" });
       }
 
-      console.log(`✅ Password successfully reset for: ${normalizedEmail}`);
-      res.json({ success: true, message: "Password has been successfully reset. You can now log in with your new password." });
+      console.log(`✅ PIN successfully reset for: ${normalizedEmail}`);
+      res.json({ success: true, message: "PIN has been successfully reset. You can now log in with your new PIN." });
     } catch (err: any) {
-      console.error("Reset password error:", err);
-      res.status(500).json({ error: err.message || "Failed to reset password" });
+      console.error("PIN reset error:", err);
+      res.status(500).json({ error: err.message || "Failed to reset PIN" });
     }
   });
 
@@ -5991,9 +6032,11 @@ async function startServer() {
     try {
       await ensureSupabaseRecordingsBucket();
       const storage = getSupabase().storage.from(SUPABASE_RECORDINGS_BUCKET);
-      const cutoffMs = Date.now() - SUPABASE_RECORDINGS_RETENTION_HOURS * 60 * 60 * 1000;
+      // Delete recordings older than 48 hours
+      const fortyEightHoursAgo = Date.now() - 48 * 60 * 60 * 1000;
       const limit = 100;
       let offset = 0;
+      let totalDeleted = 0;
 
       while (true) {
         const { data, error } = await storage.list(SUPABASE_RECORDINGS_PREFIX, {
@@ -6015,10 +6058,10 @@ async function startServer() {
           .filter((item: any) => {
             const createdAtValue =
               typeof item.created_at === "string"
-                ? new Date(item.created_at)
-                : parseSupabaseRecordingTimestamp(item.name);
+                ? new Date(item.created_at).getTime()
+                : parseSupabaseRecordingTimestamp(item.name)?.getTime();
 
-            return !!createdAtValue && !Number.isNaN(createdAtValue.getTime()) && createdAtValue.getTime() < cutoffMs;
+            return !!createdAtValue && createdAtValue < fortyEightHoursAgo;
           })
           .map((item: any) => buildSupabaseRecordingPath(item.name));
 
@@ -6028,8 +6071,9 @@ async function startServer() {
             throw removeError;
           }
 
+          totalDeleted += stalePaths.length;
           for (const stalePath of stalePaths) {
-            console.log(`[Supabase Cleanup] Deleted old recording: ${stalePath}`);
+            console.log(`🗑️ [Supabase Cleanup] Deleted old recording (>48hrs): ${stalePath}`);
           }
         }
 
@@ -6038,6 +6082,10 @@ async function startServer() {
         }
 
         offset += items.length;
+      }
+
+      if (totalDeleted > 0) {
+        console.log(`✅ [Supabase Cleanup] Cleanup complete: ${totalDeleted} old recordings deleted`);
       }
     } catch (err) {
       console.error("[Supabase Cleanup] Error:", err);
@@ -6069,7 +6117,7 @@ async function startServer() {
 
   scheduleDriveCleanup();
 
-  // Run Supabase recordings cleanup on startup and every hour
+  // Run Supabase recordings cleanup on startup and every 30 minutes for 48-hour retention
   (async () => {
     try {
       console.log("[Supabase Cleanup] Running initial cleanup on startup...");
@@ -6079,13 +6127,14 @@ async function startServer() {
     }
   })();
 
+  // Run cleanup every 30 minutes for 48-hour retention
   setInterval(async () => {
     try {
       await runSupabaseRecordingsCleanup();
     } catch (err) {
       console.error("[Supabase Cleanup] Periodic cleanup failed:", err);
     }
-  }, 60 * 60 * 1000); // Run every hour
+  }, 30 * 60 * 1000); // Run every 30 minutes
 
   app.get("/api/faculty/:id/google/status", async (req, res) => {
     try {
@@ -6658,11 +6707,11 @@ async function startServer() {
           path: buildSupabaseRecordingPath(file.name),
           name: file.name,
           mimeType: typeof metadata.mimetype === "string" ? metadata.mimetype : "audio/webm",
-          createdTime:
+          created_at:
             typeof file.created_at === "string"
               ? file.created_at
               : parseSupabaseRecordingTimestamp(file.name)?.toISOString() || null,
-          modifiedTime: typeof file.updated_at === "string" ? file.updated_at : null,
+          updated_at: typeof file.updated_at === "string" ? file.updated_at : null,
           size: sizeValue,
           consultationId: parsed.consultationId,
           facultyId: parsed.facultyId,

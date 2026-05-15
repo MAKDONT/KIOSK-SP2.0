@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, LogIn, ScanLine, Keyboard, Clock } from "lucide-react";
+import { Users, LogIn, ScanLine, Keyboard, Clock, X, Check } from "lucide-react";
 import { getDayNamePHT, formatTime12HourPHTFns } from "../utils/timezoneUtils";
 
 interface Faculty {
@@ -67,6 +67,9 @@ export default function Login() {
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
   const [selectedStudentDepartment, setSelectedStudentDepartment] = useState<string | null>(null);
   const [selectedFacultyDepartment, setSelectedFacultyDepartment] = useState<string | null>(null);
+  
+  // Privacy Agreement Modal
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   useEffect(() => {
     fetchFaculty();
@@ -612,7 +615,9 @@ export default function Login() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setInputMode("manual"); setError(""); }}
+                  onClick={() => { 
+                    setShowPrivacyModal(true);
+                  }}
                   disabled={availableFaculty.length === 0}
                   className="flex-1 flex items-center justify-center gap-3 py-4 px-6 text-lg sm:text-2xl font-bold rounded-xl transition-all"
                   style={{
@@ -626,7 +631,7 @@ export default function Login() {
                 </button>
               </div>
 
-              {inputMode === "scan" ? (
+              {!showPrivacyModal && (inputMode === "scan" ? (
                 <div className="space-y-6">
                   <div className="w-full h-40 sm:h-48 border-4 border-dashed rounded-2xl flex flex-col items-center justify-center text-center transition-all"
                     style={{
@@ -737,7 +742,7 @@ export default function Login() {
                     ))}
                   </select>
                   <input
-                    type="text"
+                    type="password"
                     inputMode="numeric"
                     value={studentPin}
                     onChange={(e) => {
@@ -758,7 +763,7 @@ export default function Login() {
                     required
                   />
                 </div>
-              )}
+              ))}
             </div>
 
           {error && <p className="text-xl text-center font-semibold" style={{ color: 'var(--clay-accent-soft-coral)' }}>{error}</p>}
@@ -1001,6 +1006,112 @@ export default function Login() {
         )}
       </div>
       </div>
+
+      {/* Data Privacy Agreement Modal */}
+      {showPrivacyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-8 max-w-2xl max-h-[90vh] overflow-y-auto w-full">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
+                📋 Data Privacy Agreement
+              </h2>
+              <button
+                onClick={() => setShowPrivacyModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6" style={{ color: 'var(--clay-text-secondary)' }} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="space-y-4 mb-8 text-base leading-relaxed" style={{ color: 'var(--clay-text-secondary)' }}>
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: 'var(--clay-bg-tertiary)' }}>
+                <h3 className="font-bold text-lg mb-2" style={{ color: 'var(--clay-text-primary)' }}>
+                  ✓ What Data We Collect
+                </h3>
+                <p>
+                  When you register and use the Student Consultation System, we collect your personal information including:
+                </p>
+                <ul className="list-disc list-inside mt-2 space-y-1">
+                  <li>Student ID and Full Name</li>
+                  <li>Email Address and Course/Department</li>
+                  <li>Your Personal Identification Number (PIN)</li>
+                  <li>Consultation activity and attendance records</li>
+                  <li>Audio recordings of your consultations with faculty</li>
+                </ul>
+              </div>
+
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: 'var(--clay-bg-tertiary)' }}>
+                <h3 className="font-bold text-lg mb-2" style={{ color: 'var(--clay-text-primary)' }}>
+                  🎙️ Audio Recording
+                </h3>
+                <p>
+                  <strong>Consultation sessions are recorded for quality assurance and educational purposes.</strong> These recordings are:
+                </p>
+                <ul className="list-disc list-inside mt-2 space-y-1">
+                  <li>Automatically deleted after 48 hours</li>
+                  <li>Stored securely and encrypted</li>
+                  <li>Only accessible to the faculty member and system administrators</li>
+                  <li>Used only for improving consultation services</li>
+                </ul>
+              </div>
+
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: 'var(--clay-bg-tertiary)' }}>
+                <h3 className="font-bold text-lg mb-2" style={{ color: 'var(--clay-text-primary)' }}>
+                  🔒 Data Protection
+                </h3>
+                <p>
+                  Your data is protected using industry-standard encryption and security measures. We do not share your personal information with third parties without your consent, except where required by law.
+                </p>
+              </div>
+
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: 'var(--clay-bg-tertiary)' }}>
+                <h3 className="font-bold text-lg mb-2" style={{ color: 'var(--clay-text-primary)' }}>
+                  ℹ️ Your Rights
+                </h3>
+                <p>
+                  You have the right to access your personal data, request corrections, and inquire about how your information is being used. Contact the System Administrator for any privacy-related questions.
+                </p>
+              </div>
+
+              <p className="text-sm italic" style={{ color: 'var(--clay-text-light)' }}>
+                By clicking "I Agree & Continue," you acknowledge that you have read and understood this Data Privacy Agreement and consent to the collection and use of your data as described.
+              </p>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-4">
+              <button
+                onClick={() => setShowPrivacyModal(false)}
+                className="flex-1 py-4 px-6 rounded-2xl font-bold text-lg transition-all"
+                style={{
+                  background: 'var(--clay-bg-tertiary)',
+                  color: 'var(--clay-text-primary)',
+                  border: '2px solid var(--clay-border)'
+                }}
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => {
+                  setShowPrivacyModal(false);
+                  setInputMode("manual");
+                  setError("");
+                }}
+                className="flex-1 py-4 px-6 rounded-2xl font-bold text-lg transition-all flex items-center justify-center gap-2"
+                style={{
+                  background: 'var(--clay-accent-warm)',
+                  color: 'white'
+                }}
+              >
+                <Check className="w-5 h-5" />
+                I Agree & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Forgot Password Modal */}
     </div>

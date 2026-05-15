@@ -9,8 +9,8 @@ export default function ResetPassword() {
   const token = searchParams.get("token");
   const email = searchParams.get("email");
 
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -20,7 +20,7 @@ export default function ResetPassword() {
   useEffect(() => {
     // Validate token on mount
     if (!token || !email) {
-      setError("Invalid password reset link. Missing token or email.");
+      setError("Invalid PIN reset link. Missing token or email.");
       setValidating(false);
       return;
     }
@@ -28,22 +28,23 @@ export default function ResetPassword() {
     setValidating(false);
   }, [token, email]);
 
-  const handleResetPassword = async (e: React.FormEvent) => {
+  const handleResetPin = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Validation
-    if (!password.trim()) {
-      setError("Password is required");
+    if (!pin.trim()) {
+      setError("PIN is required");
       return;
     }
 
-    if (password.length < 4) {
-      setError("Password must be at least 4 characters long");
+    // PIN must be 4-6 digits
+    if (!/^\d{4,6}$/.test(pin)) {
+      setError("PIN must be between 4-6 digits");
       return;
     }
 
-    if (password !== confirmPassword) {
-      setError("Passwords do not match");
+    if (pin !== confirmPin) {
+      setError("PINs do not match");
       return;
     }
 
@@ -57,28 +58,28 @@ export default function ResetPassword() {
         body: JSON.stringify({
           token,
           email,
-          password: password.trim()
+          password: pin.trim()
         })
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        setError(data.error || "Failed to reset password");
+        setError(data.error || "Failed to reset PIN");
         setLoading(false);
         return;
       }
 
       setSuccess(true);
-      setPassword("");
-      setConfirmPassword("");
+      setPin("");
+      setConfirmPin("");
 
       // Redirect to login after 3 seconds
       setTimeout(() => {
         navigate("/");
       }, 3000);
     } catch (err: any) {
-      setError(err.message || "Failed to reset password");
+      setError(err.message || "Failed to reset PIN");
     } finally {
       setLoading(false);
     }
@@ -105,7 +106,7 @@ export default function ResetPassword() {
             Invalid Link
           </h1>
           <p className="text-lg text-center mb-8" style={{ color: 'var(--clay-text-secondary)' }}>
-            The password reset link is invalid or has expired. Please request a new password reset.
+            The PIN reset link is invalid or has expired. Please request a new PIN reset.
           </p>
           <button
             onClick={() => navigate("/")}
@@ -126,10 +127,10 @@ export default function ResetPassword() {
             <CheckCircle className="w-16 h-16" style={{ color: '#a8d5ba' }} />
           </div>
           <h1 className="text-3xl font-bold text-center mb-6" style={{ color: 'var(--clay-text-primary)' }}>
-            Password Reset Successful
+            PIN Reset Successful
           </h1>
           <p className="text-lg text-center mb-8" style={{ color: 'var(--clay-text-secondary)' }}>
-            Your password has been successfully reset. You will be redirected to the login page in a few seconds.
+            Your PIN has been successfully reset. You will be redirected to the login page in a few seconds.
           </p>
           <button
             onClick={() => navigate("/")}
@@ -150,19 +151,21 @@ export default function ResetPassword() {
             <Lock className="w-12 h-12" style={{ color: 'var(--clay-accent-warm)' }} />
           </div>
           <h1 className="text-4xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
-            Reset Password
+            Reset PIN
           </h1>
           <p className="text-xl" style={{ color: 'var(--clay-text-secondary)' }}>
-            Enter your new password
+            Enter your new PIN (4-6 digits)
           </p>
         </div>
 
-        <form onSubmit={handleResetPassword} className="space-y-6">
+        <form onSubmit={handleResetPin} className="space-y-6">
           <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="New Password"
+            type="text"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            placeholder="New PIN (4-6 digits)"
+            maxLength={6}
+            inputMode="numeric"
             className="w-full p-5 border-3 rounded-2xl outline-none transition-colors text-xl font-semibold"
             style={{
               borderColor: 'var(--clay-border)',
@@ -174,10 +177,12 @@ export default function ResetPassword() {
           />
 
           <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Confirm Password"
+            type="text"
+            value={confirmPin}
+            onChange={(e) => setConfirmPin(e.target.value)}
+            placeholder="Confirm PIN (4-6 digits)"
+            maxLength={6}
+            inputMode="numeric"
             className="w-full p-5 border-3 rounded-2xl outline-none transition-colors text-xl font-semibold"
             style={{
               borderColor: 'var(--clay-border)',
@@ -199,10 +204,10 @@ export default function ResetPassword() {
 
           <button
             type="submit"
-            disabled={loading || !password || !confirmPassword}
+            disabled={loading || !pin || !confirmPin}
             className="w-full py-6 px-6 text-2xl font-bold rounded-2xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed btn btn-primary min-h-[60px]"
           >
-            {loading ? "Resetting..." : "Reset Password"}
+            {loading ? "Resetting..." : "Reset PIN"}
           </button>
 
           <button

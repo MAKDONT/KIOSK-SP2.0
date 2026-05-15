@@ -49,7 +49,7 @@ export default function KioskView() {
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   
-  // Forgot Password State
+  // Forgot PIN State
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
   const [forgotPasswordMessage, setForgotPasswordMessage] = useState("");
@@ -398,11 +398,11 @@ export default function KioskView() {
       const data = await response.json();
 
       if (!response.ok) {
-        setForgotPasswordError(data.error || "Failed to send password reset email");
+        setForgotPasswordError(data.error || "Failed to send PIN reset email");
         return;
       }
 
-      setForgotPasswordMessage(`Password reset instructions have been sent to ${emailToUse}. Please check your email and follow the link to reset your password.`);
+      setForgotPasswordMessage(`PIN reset instructions have been sent to ${emailToUse}. Please check your email and follow the link to reset your PIN.`);
       
       // Auto-close modal after 5 seconds
       setTimeout(() => {
@@ -411,7 +411,7 @@ export default function KioskView() {
         setForgotPasswordError("");
       }, 5000);
     } catch (err: any) {
-      setForgotPasswordError(err.message || "Failed to send password reset email");
+      setForgotPasswordError(err.message || "Failed to send PIN reset email");
     } finally {
       setForgotPasswordLoading(false);
     }
@@ -927,16 +927,16 @@ export default function KioskView() {
         </div>
       )}
 
-      {/* Forgot Password Modal */}
+      {/* Forgot PIN Modal */}
       {showForgotPasswordModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl p-8 sm:p-12 w-full max-w-md shadow-2xl" style={{ background: 'linear-gradient(135deg, #f5f1ed 0%, #faf8f5 50%, #f0ebe5 100%)' }}>
             <div className="text-center space-y-6">
               <h2 className="text-3xl sm:text-4xl font-bold" style={{ color: 'var(--clay-text-primary)' }}>
-                Password Reset
+                PIN Reset
               </h2>
               <p className="text-lg" style={{ color: 'var(--clay-text-secondary)' }}>
-                {forgotPasswordLoading ? "Sending reset link..." : "Check your email for password reset instructions."}
+                {forgotPasswordLoading ? "Sending reset link..." : "Check your email for PIN reset instructions."}
               </p>
             </div>
 

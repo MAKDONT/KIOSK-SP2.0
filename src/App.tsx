@@ -17,6 +17,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/reset-pin" element={<ResetPassword />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/faculty/login" element={<StaffLogin />} />
           <Route path="/staff/login" element={<Navigate to="/faculty/login" replace />} />

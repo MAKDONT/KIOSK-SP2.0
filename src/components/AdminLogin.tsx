@@ -17,95 +17,185 @@ export default function AdminLogin() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
   const oauthWindowRef = useRef<Window | null>(null);
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const requestTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    
     // Verify admin session with backend instead of just checking localStorage
     const verifyAdminSession = async () => {
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        
         const res = await fetch("/api/admin/verify-session", {
           credentials: "include",
+          signal: controller.signal,
         });
-        if (res.ok) {
+        clearTimeout(timeout);
+        
+        if (res.ok && isMountedRef.current) {
           navigate("/admin/dashboard");
-        } else {
+        } else if (isMountedRef.current) {
           // Invalid session - clear localStorage
           localStorage.removeItem("user_role");
         }
-      } catch (err) {
-        localStorage.removeItem("user_role");
+      } catch (err: any) {
+        if (isMountedRef.current && err.name !== "AbortError") {
+          localStorage.removeItem("user_role");
+        }
       }
     };
 
     verifyAdminSession();
+
+    return () => {
+      isMountedRef.current = false;
+      // Cancel any in-flight requests
+      abortControllerRef.current?.abort();
+      if (requestTimeoutRef.current) {
+        clearTimeout(requestTimeoutRef.current);
+      }
+      // Clean up OAuth window
+      oauthWindowRef.current?.close();
+      oauthWindowRef.current = null;
+    };
   }, [navigate]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      if (!isMountedRef.current || submittingRef.current) return;
+      
       const data = event.data;
       if (!data || typeof data !== "object") return;
 
       if (data.type === "ADMIN_LOGIN_SUCCESS") {
+        submittingRef.current = true;
+        oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
         setGoogleLoading(false);
         localStorage.setItem("user_role", "admin");
         navigate("/admin/dashboard");
       } else if (data.type === "ADMIN_LOGIN_ERROR") {
+        oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
         setGoogleLoading(false);
         setError(data.error || "Google login failed");
+        submittingRef.current = false;
       } else if (data.type === "ADMIN_RESET_SUCCESS") {
+        submittingRef.current = true;
+        oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
         setGoogleLoading(false);
         setResetEmail(data.email || "");
         setView("reset_form");
       } else if (data.type === "ADMIN_RESET_ERROR") {
+        oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
         setGoogleLoading(false);
         setError(data.error || "Google verification failed");
+        submittingRef.current = false;
       }
     };
 
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      // Clean up OAuth window on unmount
+      oauthWindowRef.current?.close();
+      oauthWindowRef.current = null;
+    };
   }, [navigate]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
+    if (!isMountedRef.current || submittingRef.current) return;
+    
+    submittingRef.current = true;
     setLoading(true);
     setError("");
 
     try {
-      const res = await fetch("/api/admin/login", {
+      // Cancel any previous request
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+
+      // Set request timeout for production latency
+      const timeoutPromise = new Promise((_, reject) => {
+        requestTimeoutRef.current = setTimeout(() => {
+          abortControllerRef.current?.abort();
+          reject(new Error("Request timeout. Please check your connection."));
+        }, 10000);
+      });
+
+      const fetchPromise = fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ password }),
+        signal: abortControllerRef.current.signal,
       });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+      clearTimeout(requestTimeoutRef.current!);
+      
       const data = await res.json();
       if (!res.ok) {
         // Handle specific error cases
         if (res.status === 403 && data.error === "Admin account not configured") {
-          setError("Admin account not yet configured. Please set up your admin password using Google verification.");
-          setView("reset_verify");
+          if (isMountedRef.current) {
+            setError("Admin account not yet configured. Please set up your admin password using Google verification.");
+            setView("reset_verify");
+          }
           return;
         }
         throw new Error(data.error || "Invalid admin password");
       }
 
-      localStorage.setItem("user_role", "admin");
-      navigate("/admin/dashboard");
+      if (isMountedRef.current) {
+        localStorage.setItem("user_role", "admin");
+        navigate("/admin/dashboard");
+      }
     } catch (err: any) {
-      setError(err.message || "Failed to login");
+      if (isMountedRef.current && err.name !== "AbortError") {
+        setError(err.message || "Failed to login");
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+      submittingRef.current = false;
     }
   };
 
   const handleGoogleLogin = async () => {
+    if (!isMountedRef.current || submittingRef.current || googleLoading) return;
+    submittingRef.current = true;
     setGoogleLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/google/login-url");
+      // Cancel any previous request
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+
+      // Set request timeout for production latency
+      const timeoutPromise = new Promise((_, reject) => {
+        requestTimeoutRef.current = setTimeout(() => {
+          abortControllerRef.current?.abort();
+          reject(new Error("Request timeout. Please check your connection."));
+        }, 10000);
+      });
+
+      const fetchPromise = fetch("/api/admin/google/login-url", {
+        signal: abortControllerRef.current.signal,
+      });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+      clearTimeout(requestTimeoutRef.current!);
+      
       const data = await res.json();
       if (!data.url) throw new Error("Failed to get Google login URL");
       const w = 500, h = 600;
@@ -116,16 +206,40 @@ export default function AdminLogin() {
         throw new Error("Popup blocked. Please allow popups and try again.");
       }
     } catch (err: any) {
-      setGoogleLoading(false);
-      setError(err.message || "Google login failed");
+      if (isMountedRef.current && err.name !== "AbortError") {
+        setGoogleLoading(false);
+        setError(err.message || "Google login failed");
+      }
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   const handleGoogleReset = async () => {
+    if (!isMountedRef.current || submittingRef.current || googleLoading) return;
+    submittingRef.current = true;
     setGoogleLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/google/reset-url");
+      // Cancel any previous request
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+
+      // Set request timeout for production latency
+      const timeoutPromise = new Promise((_, reject) => {
+        requestTimeoutRef.current = setTimeout(() => {
+          abortControllerRef.current?.abort();
+          reject(new Error("Request timeout. Please check your connection."));
+        }, 10000);
+      });
+
+      const fetchPromise = fetch("/api/admin/google/reset-url", {
+        signal: abortControllerRef.current.signal,
+      });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+      clearTimeout(requestTimeoutRef.current!);
+      
       const data = await res.json();
       if (!data.url) throw new Error("Failed to get Google verification URL");
       const w = 500, h = 600;
@@ -136,36 +250,69 @@ export default function AdminLogin() {
         throw new Error("Popup blocked. Please allow popups and try again.");
       }
     } catch (err: any) {
-      setGoogleLoading(false);
-      setError(err.message || "Google verification failed");
+      if (isMountedRef.current && err.name !== "AbortError") {
+        setGoogleLoading(false);
+        setError(err.message || "Google verification failed");
+      }
+    } finally {
+      submittingRef.current = false;
     }
   };
 
   const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
+    if (!isMountedRef.current || submittingRef.current) return;
+    
+    submittingRef.current = true;
     setError("");
     if (newPassword.length < 6) {
       setError("Password must be at least 6 characters");
+      submittingRef.current = false;
       return;
     }
     if (newPassword !== confirmPassword) {
       setError("Passwords do not match");
+      submittingRef.current = false;
       return;
     }
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/reset-password", {
+      // Cancel any previous request
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+
+      // Set request timeout for production latency
+      const timeoutPromise = new Promise((_, reject) => {
+        requestTimeoutRef.current = setTimeout(() => {
+          abortControllerRef.current?.abort();
+          reject(new Error("Request timeout. Please check your connection."));
+        }, 10000);
+      });
+
+      const fetchPromise = fetch("/api/admin/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: resetEmail, new_password: newPassword }),
+        signal: abortControllerRef.current.signal,
       });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+      clearTimeout(requestTimeoutRef.current!);
+      
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to reset password");
-      setResetSuccess(true);
+      if (isMountedRef.current) {
+        setResetSuccess(true);
+      }
     } catch (err: any) {
-      setError(err.message || "Failed to reset password");
+      if (isMountedRef.current && err.name !== "AbortError") {
+        setError(err.message || "Failed to reset password");
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+      submittingRef.current = false;
     }
   };
 

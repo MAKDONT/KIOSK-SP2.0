@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff, MessageCircle } from "lucide-react";
+import { Users, CheckCircle, Video, XCircle, ChevronRight, Clock, ArrowLeft, LogOut, KeyRound, AlertTriangle, Eye, EyeOff, MessageCircle, Download, Play, Trash2 } from "lucide-react";
 import { clearStaffSession, getStaffSessionUserId } from "../staffSession";
 import { formatTime12HourPHTFns, formatInTimezonePHT, getDayNamePHT } from "../utils/timezoneUtils";
 
@@ -24,6 +24,18 @@ interface Faculty {
   full_name?: string;
   department: string;
   status: string;
+}
+
+interface ConsultationRecording {
+  name: string;
+  path: string;
+  created_at: string;
+  size: number;
+  consultationId?: string;
+  facultyId?: string;
+  studentId?: string;
+  studentName?: string;
+  studentNumber?: string;
 }
 
 interface RecordingContext {
@@ -104,6 +116,14 @@ export default function FacultyDashboard() {
     meet_link: string;
     minutes_until_start: number;
   } | null>(null);
+  const [recordings, setRecordings] = useState<ConsultationRecording[]>([]);
+  const [loadingRecordings, setLoadingRecordings] = useState(false);
+  const [playingRecording, setPlayingRecording] = useState<string | null>(null);
+  const [deletingRecording, setDeletingRecording] = useState<string | null>(null);
+  const [consultationEndTime, setConsultationEndTime] = useState<number | null>(null);
+  const [warningGiven, setWarningGiven] = useState(false);
+  const [autoCompleteScheduled, setAutoCompleteScheduled] = useState(false);
+  const [remainingTime, setRemainingTime] = useState<string>("");
   const sessionWindowRef = useRef<Window | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
@@ -189,6 +209,7 @@ export default function FacultyDashboard() {
     if (selectedFaculty) {
       fetchQueue();
       void fetchGoogleMeetStatus();
+      void fetchRecordings();
       // Setup WebSocket for real-time updates
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(`${protocol}//${window.location.host}`);
@@ -227,11 +248,17 @@ export default function FacultyDashboard() {
         }
       };
 
+      // Refresh recordings every 30 seconds
+      const recordingsIntervalId = window.setInterval(() => {
+        void fetchRecordings();
+      }, 30000);
+
       return () => {
         shouldCloseAfterConnect = true;
         if (ws.readyState === WebSocket.OPEN) {
           ws.close();
         }
+        window.clearInterval(recordingsIntervalId);
       };
     }
   }, [selectedFaculty]);
@@ -312,6 +339,81 @@ export default function FacultyDashboard() {
       if (retries > 0) {
         setTimeout(() => fetchQueue(retries - 1), 2000);
       }
+    }
+  };
+
+  const fetchRecordings = async () => {
+    if (!selectedFaculty) return;
+    
+    try {
+      setLoadingRecordings(true);
+      const res = await fetch("/api/recordings");
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      
+      if (data.files && Array.isArray(data.files)) {
+        // Filter recordings by current faculty
+        const facultyRecordings = data.files.filter((recording: any) => {
+          // Extract faculty_id from filename or metadata
+          return recording.facultyId === selectedFaculty || recording.path?.includes(`faculty-${selectedFaculty}`);
+        });
+        
+        // Sort by created_at descending (newest first)
+        facultyRecordings.sort((a: ConsultationRecording, b: ConsultationRecording) => {
+          const dateA = new Date(a.created_at).getTime();
+          const dateB = new Date(b.created_at).getTime();
+          return dateB - dateA;
+        });
+        
+        setRecordings(facultyRecordings);
+      }
+    } catch (err) {
+      // Error fetching recordings
+      console.error("Error fetching recordings:", err);
+    } finally {
+      setLoadingRecordings(false);
+    }
+  };
+
+  const playRecording = (recordingPath: string) => {
+    // Open recording in new tab for playback
+    window.open(`/api/recordings/content?path=${encodeURIComponent(recordingPath)}`, "_blank");
+  };
+
+  const downloadRecording = (recordingPath: string, recordingName: string) => {
+    // Download recording with proper filename
+    const a = document.createElement("a");
+    a.href = `/api/recordings/content?path=${encodeURIComponent(recordingPath)}&download=true`;
+    a.download = recordingName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+  };
+
+  const formatDate = (dateString: string): string => {
+    try {
+      if (!dateString) return "Invalid date";
+      const date = new Date(dateString);
+      if (Number.isNaN(date.getTime())) {
+        return "Invalid date";
+      }
+      return date.toLocaleString("en-PH", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return "Invalid date";
     }
   };
 
@@ -1214,6 +1316,102 @@ export default function FacultyDashboard() {
     }
   };
 
+  // Extract end time from time_period (e.g., "Monday 09:00 AM - 09:15 AM")
+  const getConsultationEndTime = (timePeriod: string | null | undefined): number | null => {
+    if (!timePeriod) return null;
+    
+    try {
+      const timeMatch = timePeriod.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (!timeMatch) return null;
+      
+      let endHour = parseInt(timeMatch[4], 10);
+      const endMin = parseInt(timeMatch[5], 10);
+      const endAmPm = timeMatch[6].toUpperCase();
+      
+      if (endAmPm === 'PM' && endHour < 12) endHour += 12;
+      if (endAmPm === 'AM' && endHour === 12) endHour = 0;
+      
+      const endDate = new Date();
+      endDate.setHours(endHour, endMin, 0, 0);
+      return endDate.getTime();
+    } catch {
+      return null;
+    }
+  };
+
+  // Play voice notification using Web Speech API
+  const playVoiceWarning = (message: string) => {
+    try {
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error("Error playing voice notification:", err);
+    }
+  };
+
+  // Monitor active consultation and auto-complete when time is up
+  useEffect(() => {
+    const activeConsultation = queue.find(q => q.status === "serving");
+    
+    if (!activeConsultation || !activeConsultation.time_period) {
+      setConsultationEndTime(null);
+      setWarningGiven(false);
+      setAutoCompleteScheduled(false);
+      setRemainingTime("");
+      return;
+    }
+
+    const endTime = getConsultationEndTime(activeConsultation.time_period);
+    if (!endTime) {
+      setConsultationEndTime(null);
+      setWarningGiven(false);
+      setAutoCompleteScheduled(false);
+      setRemainingTime("");
+      return;
+    }
+
+    setConsultationEndTime(endTime);
+
+    // Setup monitoring interval
+    const monitoringInterval = setInterval(() => {
+      const now = Date.now();
+      const timeUntilEnd = endTime - now;
+      const minutesUntilEnd = timeUntilEnd / (1000 * 60);
+      const secondsRemaining = Math.floor((timeUntilEnd / 1000) % 60);
+      const minutesRemaining = Math.floor(minutesUntilEnd);
+
+      // Update remaining time display
+      if (timeUntilEnd > 0) {
+        setRemainingTime(`${minutesRemaining}:${secondsRemaining.toString().padStart(2, '0')}`);
+      } else {
+        setRemainingTime("Time's up!");
+      }
+
+      // 1-minute warning (give warning once)
+      if (minutesUntilEnd <= 1 && minutesUntilEnd > 0.5 && !warningGiven) {
+        setWarningGiven(true);
+        playVoiceWarning("Warning: You have 1 minute remaining for this consultation.");
+        playNotificationSound(null);
+      }
+
+      // Auto-complete when time is up
+      if (timeUntilEnd <= 0 && !autoCompleteScheduled) {
+        setAutoCompleteScheduled(true);
+        clearInterval(monitoringInterval);
+        
+        // Auto-complete consultation
+        updateStatus(activeConsultation.id, "completed", undefined, true, true).catch(err => {
+          console.error("Error auto-completing consultation:", err);
+        });
+      }
+    }, 1000); // Check every second
+
+    return () => clearInterval(monitoringInterval);
+  }, [queue, warningGiven, autoCompleteScheduled]);
+
   return (
     <div className="min-h-[100dvh] bg-neutral-100 flex flex-col">
       {/* Consultation Alert Modal */}
@@ -1305,10 +1503,21 @@ export default function FacultyDashboard() {
           return (
             <div className="lg:col-span-3 mb-2 bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-neutral-200 flex flex-col min-h-[360px] sm:min-h-[440px] xl:min-h-[520px]">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
-                <h2 className="text-lg sm:text-xl font-bold text-neutral-900 flex items-center gap-2">
-                  <Video className="w-6 h-6 text-indigo-600" />
-                  Active Consultation: {activeSession.student_name}
-                </h2>
+                <div className="flex items-center gap-4">
+                  <h2 className="text-lg sm:text-xl font-bold text-neutral-900 flex items-center gap-2">
+                    <Video className="w-6 h-6 text-indigo-600" />
+                    Active Consultation: {activeSession.student_name}
+                  </h2>
+                  {remainingTime && (
+                    <div className={`px-4 py-2 rounded-lg font-bold text-lg font-mono ${
+                      remainingTime === "Time's up!" 
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      ⏱️ {remainingTime}
+                    </div>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => updateStatus(activeSession.id, "completed", undefined, true)}
@@ -1485,6 +1694,79 @@ export default function FacultyDashboard() {
                         </button>
                       </div>
                     )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Consultation Recordings */}
+        <div className="lg:col-span-3 space-y-4 sm:space-y-6 min-h-0">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl sm:text-2xl font-bold text-neutral-900 flex items-center gap-2">
+              <Video className="w-6 h-6 text-indigo-600" />
+              Consultation Recordings
+            </h2>
+            <span className="w-fit px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full font-medium">
+              {recordings.length} Recording{recordings.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            {loadingRecordings ? (
+              <div className="bg-white rounded-2xl p-12 text-center text-neutral-500 shadow-sm border border-neutral-200">
+                <div className="w-8 h-8 mx-auto mb-4 border-4 border-neutral-200 border-t-indigo-600 rounded-full animate-spin" />
+                <p className="text-lg">Loading recordings...</p>
+              </div>
+            ) : recordings.length === 0 ? (
+              <div className="bg-white rounded-2xl p-12 text-center text-neutral-500 shadow-sm border border-neutral-200">
+                <Video className="w-16 h-16 mx-auto mb-4 text-neutral-300" />
+                <p className="text-xl">No recordings yet.</p>
+                <p className="text-sm mt-2">Recordings will appear here after you complete consultations with recording enabled.</p>
+              </div>
+            ) : (
+              recordings.map((recording) => (
+                <div
+                  key={recording.path}
+                  className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-neutral-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:shadow-md"
+                >
+                  <div className="flex items-center gap-4 sm:gap-6 flex-1 min-w-0">
+                    <div className="flex-shrink-0 w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center">
+                      <Video className="w-6 h-6 text-indigo-600" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-lg sm:text-lg font-bold text-neutral-900 truncate">
+                        {recording.studentName || "Recording"}
+                      </h3>
+                      <p className="mt-1 text-sm text-neutral-600 truncate">
+                        {recording.studentNumber && `Student: ${recording.studentNumber}`}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 mt-2 text-xs sm:text-sm text-neutral-500">
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                          <span className="text-xs sm:text-sm">{formatDate(recording.created_at)}</span>
+                        </span>
+                        <span className="px-2 py-0.5 bg-neutral-100 rounded text-[10px] sm:text-xs uppercase tracking-wider font-medium">
+                          {formatFileSize(recording.size)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <button
+                      onClick={() => playRecording(recording.path)}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors shadow-sm"
+                    >
+                      <Play className="w-4 h-4" /> Play
+                    </button>
+                    <button
+                      onClick={() => downloadRecording(recording.path, recording.name)}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-2 border border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-700 font-medium rounded-xl transition-colors"
+                    >
+                      <Download className="w-4 h-4" /> Download
+                    </button>
                   </div>
                 </div>
               ))
