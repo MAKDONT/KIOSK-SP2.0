@@ -91,6 +91,7 @@ export default function FacultyDashboard() {
   const navigate = useNavigate();
   const [faculty, setFaculty] = useState<Faculty[]>([]);
   const [queue, setQueue] = useState<Consultation[]>([]);
+  const [groupedQueue, setGroupedQueue] = useState<Array<{ date: string; displayDate: string; items: Consultation[]; servingCount: number; waitingCount: number }>>([]);
   const [meetLinksByConsultation, setMeetLinksByConsultation] = useState<Record<number, string>>({});
   const [manualMeetFallbackOpen, setManualMeetFallbackOpen] = useState<Record<number, boolean>>({});
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
@@ -308,6 +309,75 @@ export default function FacultyDashboard() {
 
       return next;
     });
+  }, [queue]);
+
+  // Group queue by date whenever it changes
+  useEffect(() => {
+    const dateGroups: Record<string, { serving: Consultation[], waiting: Consultation[] }> = {};
+
+    // Group items by queue_date
+    queue.forEach(item => {
+      // Use queue_date if available, otherwise use a generic key
+      const dateKey = item.queue_date || "No Date";
+      if (!dateGroups[dateKey]) {
+        dateGroups[dateKey] = { serving: [], waiting: [] };
+      }
+      if (item.status === "serving") {
+        dateGroups[dateKey].serving.push(item);
+      } else {
+        dateGroups[dateKey].waiting.push(item);
+      }
+    });
+
+    // Convert to array and sort dates chronologically
+    const sortedDates = Object.entries(dateGroups).sort(([dateA], [dateB]) => {
+      try {
+        const a = new Date(dateA).getTime();
+        const b = new Date(dateB).getTime();
+        return a - b;
+      } catch {
+        return 0;
+      }
+    });
+
+    // Return structured groups with FIFO ordering within each date
+    const grouped = sortedDates.map(([dateKey, groups]) => {
+      // Sort serving by created_at (FIFO within serving)
+      const sortedServing = [...groups.serving].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      // Sort waiting by created_at (FIFO within waiting)
+      const sortedWaiting = [...groups.waiting].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      // Format display date
+      let displayDate = dateKey;
+      if (dateKey !== "No Date") {
+        try {
+          const dateObj = new Date(dateKey + 'T00:00:00');
+          const formatter = new Intl.DateTimeFormat("en-US", {
+            weekday: "long",
+            month: "short",
+            day: "numeric"
+          });
+          displayDate = formatter.format(dateObj);
+        } catch (e) {
+          displayDate = dateKey;
+        }
+      }
+
+      return {
+        date: dateKey,
+        displayDate,
+        items: [...sortedServing, ...sortedWaiting],
+        servingCount: sortedServing.length,
+        waitingCount: sortedWaiting.length,
+      };
+    });
+
+    setGroupedQueue(grouped);
   }, [queue]);
 
   const fetchFaculty = async (retries = 3) => {
@@ -1497,116 +1567,82 @@ export default function FacultyDashboard() {
       </header>
 
       <main className="flex-1 min-h-0 p-4 sm:p-6 xl:p-8 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
-        {/* Active Session Virtual Room */}
-        {queue.find(q => q.status === "serving") && (() => {
-          const activeSession = queue.find(q => q.status === "serving")!;
-          return (
-            <div className="lg:col-span-3 mb-2 bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-neutral-200 flex flex-col min-h-[360px] sm:min-h-[440px] xl:min-h-[520px]">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4">
-                <div className="flex items-center gap-4">
-                  <h2 className="text-lg sm:text-xl font-bold text-neutral-900 flex items-center gap-2">
-                    <Video className="w-6 h-6 text-indigo-600" />
-                    Active Consultation: {activeSession.student_name}
-                  </h2>
-                  {remainingTime && (
-                    <div className={`px-4 py-2 rounded-lg font-bold text-lg font-mono ${
-                      remainingTime === "Time's up!" 
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      ⏱️ {remainingTime}
-                    </div>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => updateStatus(activeSession.id, "completed", undefined, true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-medium rounded-xl transition-colors"
-                  >
-                    <CheckCircle className="w-4 h-4" /> Complete
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex-1 flex flex-col items-center justify-center bg-neutral-50 rounded-xl border-2 border-dashed border-neutral-200 p-6 sm:p-8 text-center">
-                <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mb-4">
-                  <Video className="w-8 h-8 text-indigo-600" />
-                </div>
-                <h3 className="text-xl font-bold text-neutral-900 mb-2">Consultation in Progress</h3>
-                <p className="text-neutral-500 max-w-md mb-6">
-                  Recording is active. Open Google Meet from here when you are ready, and use this link again anytime you need to return to the room.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => focusSessionWindow(activeSession.meet_link || "")}
-                  className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition-colors shadow-sm inline-flex items-center justify-center gap-2"
-                >
-                  <Video className="w-5 h-5" /> Go To Google Meet
-                </button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* Queue List */}
+        {/* Queue List - Grouped by Consultation Date */}
         <div className="lg:col-span-2 space-y-4 sm:space-y-6 min-h-0">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Live Queue</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-neutral-900">Queue by Date</h2>
             <span className="w-fit px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full font-medium">
-              {queue.length} Students Waiting
+              {queue.length} Total Students
             </span>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             {queue.length === 0 ? (
               <div className="bg-white rounded-2xl p-12 text-center text-neutral-500 shadow-sm border border-neutral-200">
                 <Clock className="w-16 h-16 mx-auto mb-4 text-neutral-300" />
                 <p className="text-xl">No students in queue.</p>
               </div>
             ) : (
-              queue.map((student, index) => (
-                <div
-                  key={student.id}
-                  className={`bg-white rounded-2xl p-4 sm:p-6 shadow-sm border-l-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
-                    student.status === "serving"
-                      ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/50"
-                      : "border-neutral-300"
-                  }`}
-                >
-                  <div className="flex items-center gap-4 sm:gap-6">
-                    <div className="text-3xl sm:text-4xl font-black text-neutral-200 w-10 sm:w-12 text-center shrink-0">
-                      {index + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="text-lg sm:text-xl font-bold text-neutral-900 truncate">
-                        {student.student_name}
+              <>
+                {/* Current/Main Queue - Large Display */}
+                {groupedQueue[0] && (
+                  <div key={groupedQueue[0].date} className="border-2 border-blue-300 bg-gradient-to-br from-blue-50 to-blue-25 p-6 sm:p-8 rounded-2xl space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-2xl sm:text-3xl text-neutral-900">
+                        📅 {groupedQueue[0].displayDate}
                       </h3>
-                      <p className="mt-1 text-sm sm:text-base text-neutral-600">
-                        <span className="font-semibold">Concern:</span> {student.purpose || "No concern provided."}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2 mt-2 text-xs sm:text-sm text-neutral-400">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
-                          {getConsultationTimeLabel(student)}
-                        </span>
-                        <span className="px-2 py-0.5 bg-neutral-100 rounded text-[10px] sm:text-xs uppercase tracking-wider">
-                          {student.source}
-                        </span>
-                        {student.status === "serving" && (
-                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] sm:text-xs font-bold uppercase tracking-wider flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                            Currently Serving
+                      <span className="text-sm font-semibold px-4 py-2 bg-white rounded-lg border border-neutral-200">
+                        {groupedQueue[0].servingCount} serving • {groupedQueue[0].waitingCount} waiting
+                      </span>
+                    </div>
+
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {groupedQueue[0].items.length === 0 ? (
+                        <div className="text-sm text-neutral-400 py-4">No students for this date.</div>
+                      ) : (
+                        groupedQueue[0].items.map((student, indexInDate) => (
+                  <div
+                    key={student.id}
+                    className={`bg-white rounded-2xl p-5 sm:p-6 shadow-sm border-l-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
+                      student.status === "serving"
+                        ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/50"
+                        : "border-neutral-300"
+                    }`}
+                  >
+                    <div className="flex items-center gap-4 sm:gap-6">
+                      <div className="text-4xl sm:text-5xl font-black text-neutral-200 w-12 sm:w-14 text-center shrink-0">
+                        {indexInDate + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-lg sm:text-xl font-bold text-neutral-900 truncate">
+                          {student.student_name}
+                        </h3>
+                        <p className="mt-1 text-sm sm:text-base text-neutral-600">
+                          <span className="font-semibold">Concern:</span> {student.purpose || "No concern provided."}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 mt-2 text-xs sm:text-sm text-neutral-400">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 sm:w-4 sm:h-4" />
+                            {getConsultationTimeLabel(student)}
                           </span>
-                        )}
+                          <span className="px-2 py-0.5 bg-neutral-100 rounded text-[10px] sm:text-xs uppercase tracking-wider">
+                            {student.source}
+                          </span>
+                          {student.status === "serving" && (
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] sm:text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                              Currently Serving
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto mt-2 sm:mt-0">
-                    {(student.status === "waiting") && (
-                      <div className="flex flex-col gap-2 items-stretch sm:items-end w-full sm:w-auto">
-                        {student.meet_link ? (
-                          <div className="flex items-center gap-2 bg-indigo-50 px-3 py-2 rounded-xl text-sm w-full sm:w-72 border border-indigo-100">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto mt-2 sm:mt-0">
+                      {(student.status === "waiting") && (
+                        <div className="flex flex-col gap-2 items-stretch sm:items-end w-full sm:w-auto">
+                          {student.meet_link ? (
+                            <div className="flex items-center gap-2 bg-indigo-50 px-3 py-2 rounded-xl text-sm w-full sm:w-72 border border-indigo-100">
                             <Video className="w-4 h-4 text-indigo-500 shrink-0" />
                             <a 
                               href={student.meet_link} 
@@ -1696,12 +1732,118 @@ export default function FacultyDashboard() {
                     )}
                   </div>
                 </div>
-              ))
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Advanced Scheduled Queues - Compact Grid */}
+                {groupedQueue.length > 1 && (
+                  <div className="space-y-3">
+                    <h3 className="font-bold text-lg text-neutral-700">Advanced Scheduled Queues</h3>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {groupedQueue.slice(1).map((dateGroup) => (
+                        <div key={dateGroup.date} className="border-2 border-amber-200 bg-amber-50 p-3 sm:p-4 rounded-xl space-y-2">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-bold text-sm text-neutral-900">
+                              {dateGroup.displayDate}
+                            </h4>
+                            <span className="text-xs font-semibold px-2 py-1 bg-white rounded border border-neutral-200">
+                              {dateGroup.servingCount}•{dateGroup.waitingCount}
+                            </span>
+                          </div>
+
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {dateGroup.items.length === 0 ? (
+                              <div className="text-xs text-neutral-400 py-2">No students</div>
+                            ) : (
+                              dateGroup.items.map((student, indexInDate) => (
+                                <div
+                                  key={student.id}
+                                  className={`bg-white rounded-lg p-2 text-xs border-l-2 flex items-start justify-between gap-2 ${
+                                    student.status === "serving"
+                                      ? "border-emerald-500 bg-emerald-50/30"
+                                      : "border-neutral-200"
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                                    <span className="font-bold text-neutral-400 w-5 flex-shrink-0">#{indexInDate + 1}</span>
+                                    <div className="min-w-0">
+                                      <p className="font-semibold text-neutral-900 truncate">{student.student_name}</p>
+                                      <p className="text-neutral-600 truncate">{student.purpose || "No concern"}</p>
+                                    </div>
+                                  </div>
+                                  {student.status === "serving" && (
+                                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded flex-shrink-0">
+                                      Serving
+                                    </span>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
 
-        {/* Consultation Recordings */}
+        {/* Active Session Virtual Room - Right Side */}
+        {queue.find(q => q.status === "serving") && (() => {
+          const activeSession = queue.find(q => q.status === "serving")!;
+          return (
+            <div className="lg:col-span-1 bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-neutral-200 flex flex-col min-h-[360px]">
+              <div className="flex flex-col gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-bold text-neutral-900 flex items-center gap-2">
+                    <Video className="w-5 h-5 text-indigo-600" />
+                    Active: {activeSession.student_name}
+                  </h2>
+                </div>
+                {remainingTime && (
+                  <div className={`px-3 py-1 rounded-lg font-bold text-sm font-mono w-fit ${
+                    remainingTime === "Time's up!" 
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    ⏱️ {remainingTime}
+                  </div>
+                )}
+              </div>
+              
+              <div className="flex-1 flex flex-col items-center justify-center bg-neutral-50 rounded-xl border-2 border-dashed border-neutral-200 p-4 text-center">
+                <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-3">
+                  <Video className="w-6 h-6 text-indigo-600" />
+                </div>
+                <h3 className="text-sm font-bold text-neutral-900 mb-2">In Progress</h3>
+                <p className="text-xs text-neutral-500 mb-4">
+                  Recording active
+                </p>
+                <button
+                  type="button"
+                  onClick={() => focusSessionWindow(activeSession.meet_link || "")}
+                  className="w-full px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-xl transition-colors shadow-sm inline-flex items-center justify-center gap-2"
+                >
+                  <Video className="w-4 h-4" /> Open Meet
+                </button>
+              </div>
+              
+              <button
+                onClick={() => updateStatus(activeSession.id, "completed", undefined, true)}
+                className="w-full mt-3 flex items-center justify-center gap-2 px-3 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-medium text-sm rounded-xl transition-colors"
+              >
+                <CheckCircle className="w-4 h-4" /> Complete
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Consultation Recordings - Below Session Controls */}
         <div className="lg:col-span-3 space-y-4 sm:space-y-6 min-h-0">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-xl sm:text-2xl font-bold text-neutral-900 flex items-center gap-2">
@@ -1774,8 +1916,8 @@ export default function FacultyDashboard() {
           </div>
         </div>
 
-        {/* Sidebar / Stats */}
-        <div className="space-y-6 xl:sticky xl:top-6 self-start">
+        {/* Sidebar / Session Controls - Right Side */}
+        <div className="lg:col-span-1 space-y-6">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-neutral-200">
             <h3 className="text-lg font-bold text-neutral-900 mb-4">Session Controls</h3>
             {selectedFacultyData ? (

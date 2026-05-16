@@ -5559,6 +5559,22 @@ async function startServer() {
           mappedStatus = isCancelled ? 'cancelled' : 'completed';
         }
 
+        // Format consultation date for display
+        let consultation_date_display = undefined;
+        if (c.queue_date) {
+          try {
+            const dateObj = new Date(c.queue_date);
+            const formatter = new Intl.DateTimeFormat("en-US", {
+              weekday: "long",
+              month: "short",
+              day: "numeric"
+            });
+            consultation_date_display = formatter.format(dateObj);
+          } catch (e) {
+            consultation_date_display = c.queue_date;
+          }
+        }
+
         return {
           ...c,
           status: mappedStatus,
@@ -5566,7 +5582,8 @@ async function startServer() {
           student_number: c.students?.student_number || "",
           purpose: c.purpose || "",
           meet_link: actual_link,
-          time_period: time_period
+          time_period: time_period,
+          consultation_date_display,
         };
       });
 

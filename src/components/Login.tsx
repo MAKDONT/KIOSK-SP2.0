@@ -34,6 +34,7 @@ interface LiveQueueItem {
   time_period?: string | null;
   meet_link?: string | null;
   consultation_date_display?: string | null;
+  queue_date?: string | null;
 }
 
 const formatLiveMonitorTime = (timePeriod?: string | null) => {
@@ -221,6 +222,7 @@ export default function Login() {
                 student_number: item.student_number || "",
                 time_period: item.time_period || null,
                 meet_link: item.meet_link || null,
+                queue_date: item.queue_date || null,
                 consultation_date_display
               };
             });

@@ -16,6 +16,7 @@ interface LiveQueueItem {
   time_period?: string | null;
   meet_link?: string | null;
   consultation_date_display?: string | null;
+  queue_date?: string | null;
 }
 
 interface DriveRecording {
@@ -148,6 +149,7 @@ export default function AdminDashboard() {
   const [tokenMaxAgeDays, setTokenMaxAgeDays] = useState(30);
   const [liveQueue, setLiveQueue] = useState<LiveQueueItem[]>([]);
   const [liveQueueLoading, setLiveQueueLoading] = useState(false);
+  const [groupedQueue, setGroupedQueue] = useState<Array<{ date: string; displayDate: string; items: LiveQueueItem[]; servingCount: number; waitingCount: number }>>([]);
   const [driveRecordings, setDriveRecordings] = useState<DriveRecording[]>([]);
   const [driveRecordingsLoading, setDriveRecordingsLoading] = useState(false);
   const [driveRecordingsError, setDriveRecordingsError] = useState("");
@@ -231,6 +233,11 @@ export default function AdminDashboard() {
 
     void fetchDriveRecordings();
   }, [recordingStorageReady]);
+
+  // Group queue by date whenever liveQueue changes
+  useEffect(() => {
+    setGroupedQueue(groupQueueByDate(liveQueue));
+  }, [liveQueue]);
 
   const checkDriveStatus = async () => {
     try {
@@ -346,6 +353,60 @@ export default function AdminDashboard() {
     });
   };
 
+  /**
+   * Groups queue items by consultation date (queue_date)
+   * Returns an array of { date, displayDate, items } objects sorted by date
+   * Within each date, items are sorted by status (serving first) then by creation time (FIFO)
+   */
+  const groupQueueByDate = (items: LiveQueueItem[]) => {
+    const dateGroups: Record<string, { serving: LiveQueueItem[], waiting: LiveQueueItem[] }> = {};
+
+    // Group items by queue_date
+    items.forEach(item => {
+      const dateKey = item.queue_date || item.consultation_date_display || "No Date";
+      if (!dateGroups[dateKey]) {
+        dateGroups[dateKey] = { serving: [], waiting: [] };
+      }
+      if (item.status === "serving") {
+        dateGroups[dateKey].serving.push(item);
+      } else {
+        dateGroups[dateKey].waiting.push(item);
+      }
+    });
+
+    // Convert to array and sort dates chronologically
+    const sortedDates = Object.entries(dateGroups).sort(([dateA], [dateB]) => {
+      try {
+        const a = new Date(dateA).getTime();
+        const b = new Date(dateB).getTime();
+        return a - b;
+      } catch {
+        return 0;
+      }
+    });
+
+    // Return structured groups with FIFO ordering within each date
+    return sortedDates.map(([dateKey, groups]) => {
+      // Sort serving by created_at (FIFO within serving)
+      const sortedServing = [...groups.serving].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      // Sort waiting by created_at (FIFO within waiting)
+      const sortedWaiting = [...groups.waiting].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      return {
+        date: dateKey,
+        displayDate: dateKey === "No Date" ? "No Date" : dateKey,
+        items: [...sortedServing, ...sortedWaiting],
+        servingCount: sortedServing.length,
+        waitingCount: sortedWaiting.length,
+      };
+    });
+  };
+
   const fetchLegacyLiveQueue = async (): Promise<LiveQueueItem[]> => {
     const facultyRes = await fetch("/api/faculty", { credentials: "include" });
     if (!facultyRes.ok) throw new Error(`Faculty endpoint failed: ${facultyRes.status}`);
@@ -362,17 +423,37 @@ export default function AdminDashboard() {
 
           return queueData
             .filter((item: any) => ["waiting", "serving"].includes(item.status))
-            .map((item: any) => ({
-              id: Number(item.id),
-              status: item.status as LiveQueueItem["status"],
-              created_at: item.created_at,
-              faculty_id: f.id,
-              faculty_name: f.name || "Unknown Faculty",
-              student_name: item.student_name || "Unknown Student",
-              student_number: item.student_number || "",
-              time_period: item.time_period || null,
-              meet_link: item.meet_link || null,
-            }));
+            .map((item: any) => {
+              // Format consultation date for display
+              let consultation_date_display = undefined;
+              if (item.queue_date) {
+                try {
+                  const dateObj = new Date(item.queue_date);
+                  const formatter = new Intl.DateTimeFormat("en-US", {
+                    weekday: "long",
+                    month: "short",
+                    day: "numeric"
+                  });
+                  consultation_date_display = formatter.format(dateObj);
+                } catch (e) {
+                  consultation_date_display = item.queue_date;
+                }
+              }
+
+              return {
+                id: Number(item.id),
+                status: item.status as LiveQueueItem["status"],
+                created_at: item.created_at,
+                faculty_id: f.id,
+                faculty_name: f.name || "Unknown Faculty",
+                student_name: item.student_name || "Unknown Student",
+                student_number: item.student_number || "",
+                time_period: item.time_period || null,
+                meet_link: item.meet_link || null,
+                queue_date: item.queue_date || null,
+                consultation_date_display,
+              };
+            });
         } catch {
           return [];
         }
@@ -1416,22 +1497,94 @@ export default function AdminDashboard() {
               </div>
 
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
-                <h3 className="text-sm font-bold text-neutral-700 uppercase tracking-wider mb-3">Waiting Queue</h3>
-                <div className="space-y-3 max-h-72 overflow-y-auto">
-                  {waitingStudents.length === 0 ? (
-                    <div className="text-sm text-neutral-400">No students waiting.</div>
-                  ) : (
-                    waitingStudents.map((item) => (
-                      <div key={item.id} className="p-3 rounded-xl bg-white border border-neutral-200">
-                        <p className="font-semibold text-neutral-900">{item.student_name}</p>
-                        <p className="text-sm text-neutral-600">Student Number: {item.student_number || "N/A"}</p>
-                        <p className="text-xs text-neutral-500 mt-1">Faculty: {item.faculty_name}</p>
-                        {item.consultation_date_display && <p className="text-xs text-neutral-500">Date: {item.consultation_date_display}</p>}
-                        <p className="text-xs text-neutral-500">Slot: {item.time_period || "Walk-in / No slot"}</p>
+                <h3 className="text-sm font-bold text-neutral-700 uppercase tracking-wider mb-3">Queue by Consultation Date</h3>
+                
+                {groupedQueue.length === 0 ? (
+                  <div className="text-sm text-neutral-400">No students in queue.</div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Main queue (first date - typically today or next scheduled date) */}
+                    {groupedQueue[0] && (
+                      <div className="rounded-xl border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-blue-25 p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="font-bold text-neutral-900">
+                            📅 {groupedQueue[0].displayDate}
+                          </h4>
+                          <span className="text-xs font-semibold px-2 py-1 bg-blue-200 text-blue-800 rounded-lg">
+                            {groupedQueue[0].servingCount} serving • {groupedQueue[0].waitingCount} waiting
+                          </span>
+                        </div>
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
+                          {groupedQueue[0].items.length === 0 ? (
+                            <div className="text-sm text-neutral-400">No students for this date.</div>
+                          ) : (
+                            groupedQueue[0].items.map((item, idx) => (
+                              <div key={item.id} className={`p-3 rounded-lg border ${
+                                item.status === "serving"
+                                  ? "bg-emerald-50 border-emerald-300"
+                                  : "bg-white border-neutral-200"
+                              }`}>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1">
+                                    <p className="font-semibold text-neutral-900">#{idx + 1}. {item.student_name}</p>
+                                    <p className="text-xs text-neutral-600">Student #: {item.student_number || "N/A"}</p>
+                                    <p className="text-xs text-neutral-500 mt-1">Faculty: {item.faculty_name}</p>
+                                    {item.time_period && <p className="text-xs text-neutral-500">Slot: {item.time_period}</p>}
+                                  </div>
+                                  <span className={`px-2 py-1 rounded text-xs font-bold uppercase whitespace-nowrap ${
+                                    item.status === "serving"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : "bg-blue-100 text-blue-700"
+                                  }`}>
+                                    {item.status}
+                                  </span>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
                       </div>
-                    ))
-                  )}
-                </div>
+                    )}
+
+                    {/* Advance scheduled queues (future dates) */}
+                    {groupedQueue.length > 1 && (
+                      <div>
+                        <p className="text-xs font-bold text-neutral-600 uppercase tracking-wider mb-2 px-1">Advanced Scheduled Queues</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {groupedQueue.slice(1).map((dateGroup) => (
+                            <div key={dateGroup.date} className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                              <h5 className="font-bold text-neutral-900 text-sm mb-2">
+                                📆 {dateGroup.displayDate}
+                              </h5>
+                              <div className="space-y-1 max-h-48 overflow-y-auto">
+                                <p className="text-xs font-semibold text-neutral-600 mb-2">
+                                  {dateGroup.servingCount} serving • {dateGroup.waitingCount} waiting
+                                </p>
+                                {dateGroup.items.length === 0 ? (
+                                  <div className="text-xs text-neutral-400">No students</div>
+                                ) : (
+                                  dateGroup.items.map((item, idx) => (
+                                    <div key={item.id} className="text-xs p-2 bg-white rounded border border-neutral-200">
+                                      <p className="font-semibold text-neutral-900">#{idx + 1}. {item.student_name}</p>
+                                      <p className="text-neutral-600">#{item.student_number || "N/A"} • {item.faculty_name}</p>
+                                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold uppercase mt-1 ${
+                                        item.status === "serving"
+                                          ? "bg-emerald-100 text-emerald-700"
+                                          : "bg-blue-100 text-blue-700"
+                                      }`}>
+                                        {item.status}
+                                      </span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
