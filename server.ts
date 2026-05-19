@@ -112,6 +112,7 @@ const SUPABASE_RECORDINGS_RETENTION_HOURS =
     ? parsedRecordingRetentionHours
     : 48;
 const APP_TIMEZONE = unwrapEnvValue(process.env.APP_TIMEZONE) || "Asia/Manila";
+const CONSULTATION_DURATION_MS = 15 * 60 * 1000;
 
 const normalizeEmail = (value: unknown) => (
   typeof value === "string" ? value.trim().toLowerCase() : ""
@@ -5535,7 +5536,7 @@ async function startServer() {
       let { data, error } = await getSupabase()
         .from("queue")
         .select(`
-          id, student_id, status, created_at, queue_date, meet_link, purpose,
+          id, student_id, status, created_at, start_time, end_time, queue_date, meet_link, purpose,
           students (full_name, student_number)
         `)
         .eq("faculty_id", req.params.faculty_id)
@@ -5552,7 +5553,7 @@ async function startServer() {
           const fallback = await getSupabase()
             .from("queue")
             .select(`
-              id, student_id, status, created_at, queue_date, meet_link,
+              id, student_id, status, created_at, start_time, end_time, queue_date, meet_link,
               students (full_name, student_number)
             `)
             .eq("faculty_id", req.params.faculty_id)
@@ -5733,6 +5734,9 @@ async function startServer() {
         updates.meet_link = time_period ? `${time_period}|${finalMeetLink}` : finalMeetLink;
         // Store that recording is enabled for this consultation
         updates.recording_enabled = true;
+        const startedAt = new Date();
+        updates.start_time = startedAt.toISOString();
+        updates.end_time = new Date(startedAt.getTime() + CONSULTATION_DURATION_MS).toISOString();
         
         // Automatically set faculty to busy
         await getSupabase()
@@ -5953,7 +5957,12 @@ async function startServer() {
       }, req);
 
       broadcast("queue_updated", { faculty_id: consultation.faculty_id });
-      res.json({ success: true, meet_link: final_email_link || null });
+      res.json({
+        success: true,
+        meet_link: final_email_link || null,
+        start_time: updates.start_time || consultation.start_time || null,
+        end_time: updates.end_time || consultation.end_time || null,
+      });
     } catch (err: any) {
       console.error("❌ Queue status update error:", err?.message || err);
       console.error("Stack trace:", err?.stack || "N/A");
@@ -8611,6 +8620,7 @@ async function startServer() {
         database_connected: dbConnected,
         schedulers: {
           consultation_reminders: "running (checks every 30s)",
+          active_consultation_completion: "running (checks every 30s)",
           queue_auto_advance: "running (checks every 60s)",
           queue_clear: "running (daily at 11:59 PM)",
           system_logs_deletion: "running (daily at 11:59 PM)",
@@ -8630,6 +8640,115 @@ async function startServer() {
       });
     }
   });
+
+  // ==========================================
+  // SCHEDULER: Enforce 15-minute active consultations on the backend
+  // ==========================================
+  const scheduleActiveConsultationCompletion = () => {
+    const completeExpiredConsultations = async () => {
+      try {
+        const now = new Date();
+        const { data: expiredConsultations, error: fetchError } = await retryWithBackoff(async () => {
+          return await getSupabase()
+            .from("queue")
+            .select("id, student_id, student_email, faculty_id, status, start_time, end_time, students(full_name, email), faculty(email)")
+            .in("status", ["ongoing", "serving"])
+            .lte("end_time", now.toISOString());
+        }, 2, 500);
+
+        if (fetchError) {
+          console.error("❌ Active consultation completion fetch error:", fetchError.message);
+          return;
+        }
+
+        if (!expiredConsultations || expiredConsultations.length === 0) {
+          return;
+        }
+
+        console.log(`\n⏰ [ACTIVE CONSULTATION COMPLETION] Found ${expiredConsultations.length} expired active consultation(s)`);
+
+        for (const consultation of expiredConsultations) {
+          try {
+            console.log(`   Completing consultation ${consultation.id} after 15-minute limit`);
+
+            const { error: updateError } = await getSupabase()
+              .from("queue")
+              .update({ status: "done" })
+              .eq("id", consultation.id);
+
+            if (updateError) {
+              console.error(`   ❌ Failed to mark consultation done: ${updateError.message}`);
+              continue;
+            }
+
+            const { data: fac } = await getSupabase()
+              .from("faculty")
+              .select("status")
+              .eq("id", consultation.faculty_id)
+              .maybeSingle();
+
+            if (fac?.status === "busy") {
+              await getSupabase()
+                .from("faculty")
+                .update({ status: "available" })
+                .eq("id", consultation.faculty_id);
+              broadcast("faculty_updated", { faculty_id: consultation.faculty_id });
+            }
+
+            const { error: deleteError } = await getSupabase()
+              .from("queue")
+              .delete()
+              .eq("id", consultation.id);
+
+            if (deleteError) {
+              console.error(`   ❌ Failed to delete completed consultation ${consultation.id}: ${deleteError.message}`);
+              continue;
+            }
+
+            const studentName = (consultation as any)?.students?.full_name || "Unknown Student";
+            const facultyEmail = (consultation as any)?.faculty?.email || null;
+
+            await logAudit("consultation_auto_completed", {
+              consultation_id: consultation.id,
+              student_id: consultation.student_id,
+              student_name: studentName,
+              faculty_id: consultation.faculty_id,
+              start_time: consultation.start_time,
+              end_time: consultation.end_time,
+              reason: "server_15_minute_limit",
+            });
+
+            await logActivity("consultation_auto_completed", "consultation", String(consultation.id), facultyEmail, "system", {
+              student_id: consultation.student_id,
+              student_name: studentName,
+              faculty_id: consultation.faculty_id,
+              start_time: consultation.start_time,
+              end_time: consultation.end_time,
+              reason: "server_15_minute_limit",
+            });
+
+            broadcast("queue_updated", { faculty_id: consultation.faculty_id });
+            console.log(`   ✅ Auto-completed consultation ${consultation.id}`);
+          } catch (err) {
+            console.error(`   ❌ Error auto-completing consultation ${consultation.id}:`, err instanceof Error ? err.message : String(err));
+          }
+        }
+      } catch (err) {
+        console.error("❌ Error in active consultation completion scheduler:", err);
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      completeExpiredConsultations();
+    }, 30 * 1000);
+
+    completeExpiredConsultations();
+
+    console.log("⏰ Active consultation completion scheduler started (checks every 30 seconds)");
+    console.log("   ✅ Auto-completes ONGOING consultations when server end_time passes");
+
+    process.on("exit", () => clearInterval(intervalId));
+  };
 
   // ==========================================
   // SCHEDULER: Auto-advance queue - cancel WAITING students if their time slot passed
@@ -8860,6 +8979,9 @@ async function startServer() {
 
     process.on("exit", () => clearInterval(intervalId));
   };
+
+  // Start the active consultation completion scheduler
+  scheduleActiveConsultationCompletion();
 
   // Start the queue auto-advance scheduler
   scheduleQueueAutoAdvance();

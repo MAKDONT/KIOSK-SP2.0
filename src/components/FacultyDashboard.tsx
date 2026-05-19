@@ -11,6 +11,8 @@ interface Consultation {
   student_number?: string;
   status: "waiting" | "serving";
   created_at: string;
+  start_time?: string | null;
+  end_time?: string | null;
   queue_date?: string; // YYYY-MM-DD format
   source: string;
   meet_link?: string;
@@ -186,6 +188,12 @@ export default function FacultyDashboard() {
     } catch {
       return null;
     }
+  };
+
+  const parseTimestamp = (value: string | null | undefined) => {
+    if (!value) return null;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
   };
 
   const playNotificationSound = (data: any) => {
@@ -973,7 +981,7 @@ export default function FacultyDashboard() {
       }
       
       fetchQueue();
-      return payload as { success: boolean; meet_link?: string | null };
+      return payload as { success: boolean; meet_link?: string | null; start_time?: string | null; end_time?: string | null };
     } catch (err) {
       throw err instanceof Error ? err : new Error("Failed to update consultation status.");
     }
@@ -1100,7 +1108,7 @@ export default function FacultyDashboard() {
 
       // Step 3: Mark the consultation as started only after audio capture succeeds.
       const data = await updateStatus(id, "serving", finalLink || undefined, false, true);
-      beginConsultationTimer(id);
+      beginConsultationTimer(id, parseTimestamp(data?.start_time) || Date.now());
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
@@ -1457,7 +1465,13 @@ export default function FacultyDashboard() {
     const activeConsultation = queue.find(q => q.status === "serving");
     
     if (!activeConsultation) {
+      const hadActiveConsultation = activeConsultationIdRef.current !== null;
       clearConsultationTimer();
+      if (hadActiveConsultation) {
+        stopAudioRecording();
+        closeSessionWindow();
+        void fetchRecordings();
+      }
       return;
     }
 
@@ -1465,7 +1479,9 @@ export default function FacultyDashboard() {
     if (activeConsultation.id !== activeConsultationIdRef.current) {
       beginConsultationTimer(
         activeConsultation.id,
-        getStoredConsultationStartTime(activeConsultation.id) || Date.now()
+        parseTimestamp(activeConsultation.start_time) ||
+          getStoredConsultationStartTime(activeConsultation.id) ||
+          Date.now()
       );
     }
 
@@ -1474,7 +1490,9 @@ export default function FacultyDashboard() {
       return;
     }
 
-    const consultationEndTime = consultationStartTimeRef.current + CONSULTATION_DURATION_MS;
+    const consultationEndTime =
+      parseTimestamp(activeConsultation.end_time) ||
+      consultationStartTimeRef.current + CONSULTATION_DURATION_MS;
 
     // Setup monitoring interval
     const monitoringInterval = setInterval(() => {
