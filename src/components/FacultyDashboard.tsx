@@ -46,6 +46,7 @@ interface RecordingContext {
 }
 
 const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const CONSULTATION_DURATION_MS = 15 * 60 * 1000;
 
 const readJsonResponse = async (response: Response, fallbackMessage: string) => {
   const contentType = response.headers.get("content-type") || "";
@@ -121,10 +122,12 @@ export default function FacultyDashboard() {
   const [loadingRecordings, setLoadingRecordings] = useState(false);
   const [playingRecording, setPlayingRecording] = useState<string | null>(null);
   const [deletingRecording, setDeletingRecording] = useState<string | null>(null);
-  const [consultationEndTime, setConsultationEndTime] = useState<number | null>(null);
-  const [warningGiven, setWarningGiven] = useState(false);
-  const [autoCompleteScheduled, setAutoCompleteScheduled] = useState(false);
+
   const [remainingTime, setRemainingTime] = useState<string>("");
+  const activeConsultationIdRef = useRef<number | null>(null);
+  const consultationStartTimeRef = useRef<number | null>(null);
+  const warningGivenRef = useRef(false);
+  const autoCompleteScheduledRef = useRef(false);
   const sessionWindowRef = useRef<Window | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
@@ -135,6 +138,54 @@ export default function FacultyDashboard() {
   const logoutStaff = () => {
     clearStaffSession();
     navigate("/faculty/login");
+  };
+
+  const getConsultationTimerStorageKey = (consultationId: number) => (
+    `faculty-consultation-start:${selectedFaculty || "unknown"}:${consultationId}`
+  );
+
+  const beginConsultationTimer = (consultationId: number, startedAt: number = Date.now()) => {
+    activeConsultationIdRef.current = consultationId;
+    consultationStartTimeRef.current = startedAt;
+    warningGivenRef.current = false;
+    autoCompleteScheduledRef.current = false;
+    setRemainingTime("15:00");
+
+    try {
+      window.localStorage.setItem(getConsultationTimerStorageKey(consultationId), String(startedAt));
+    } catch {
+      // Timer still works in-memory if localStorage is unavailable.
+    }
+  };
+
+  const clearConsultationTimer = (consultationId?: number) => {
+    const timerConsultationId = consultationId ?? activeConsultationIdRef.current;
+
+    if (timerConsultationId !== null) {
+      try {
+        window.localStorage.removeItem(getConsultationTimerStorageKey(timerConsultationId));
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+    }
+
+    activeConsultationIdRef.current = null;
+    consultationStartTimeRef.current = null;
+    warningGivenRef.current = false;
+    autoCompleteScheduledRef.current = false;
+    setRemainingTime("");
+  };
+
+  const getStoredConsultationStartTime = (consultationId: number) => {
+    try {
+      const stored = window.localStorage.getItem(getConsultationTimerStorageKey(consultationId));
+      if (!stored) return null;
+
+      const parsed = Number(stored);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    } catch {
+      return null;
+    }
   };
 
   const playNotificationSound = (data: any) => {
@@ -912,6 +963,7 @@ export default function FacultyDashboard() {
       }
       
       if (status === "completed" || status === "cancelled") {
+        clearConsultationTimer(id);
         stopAudioRecording();
         closeSessionWindow();
       }
@@ -1048,6 +1100,7 @@ export default function FacultyDashboard() {
 
       // Step 3: Mark the consultation as started only after audio capture succeeds.
       const data = await updateStatus(id, "serving", finalLink || undefined, false, true);
+      beginConsultationTimer(id);
       const resolvedLink = data?.meet_link ? normalizeMeetLink(data.meet_link) : finalLink;
 
       if (!resolvedLink) {
@@ -1386,29 +1439,6 @@ export default function FacultyDashboard() {
     }
   };
 
-  // Extract end time from time_period (e.g., "Monday 09:00 AM - 09:15 AM")
-  const getConsultationEndTime = (timePeriod: string | null | undefined): number | null => {
-    if (!timePeriod) return null;
-    
-    try {
-      const timeMatch = timePeriod.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-      if (!timeMatch) return null;
-      
-      let endHour = parseInt(timeMatch[4], 10);
-      const endMin = parseInt(timeMatch[5], 10);
-      const endAmPm = timeMatch[6].toUpperCase();
-      
-      if (endAmPm === 'PM' && endHour < 12) endHour += 12;
-      if (endAmPm === 'AM' && endHour === 12) endHour = 0;
-      
-      const endDate = new Date();
-      endDate.setHours(endHour, endMin, 0, 0);
-      return endDate.getTime();
-    } catch {
-      return null;
-    }
-  };
-
   // Play voice notification using Web Speech API
   const playVoiceWarning = (message: string) => {
     try {
@@ -1422,33 +1452,34 @@ export default function FacultyDashboard() {
     }
   };
 
-  // Monitor active consultation and auto-complete when time is up
+  // Monitor active consultation and auto-complete after 15 minutes from actual start time
   useEffect(() => {
     const activeConsultation = queue.find(q => q.status === "serving");
     
-    if (!activeConsultation || !activeConsultation.time_period) {
-      setConsultationEndTime(null);
-      setWarningGiven(false);
-      setAutoCompleteScheduled(false);
-      setRemainingTime("");
+    if (!activeConsultation) {
+      clearConsultationTimer();
       return;
     }
 
-    const endTime = getConsultationEndTime(activeConsultation.time_period);
-    if (!endTime) {
-      setConsultationEndTime(null);
-      setWarningGiven(false);
-      setAutoCompleteScheduled(false);
-      setRemainingTime("");
+    // If this is a NEW consultation (different ID), restore the actual start time if we have it.
+    if (activeConsultation.id !== activeConsultationIdRef.current) {
+      beginConsultationTimer(
+        activeConsultation.id,
+        getStoredConsultationStartTime(activeConsultation.id) || Date.now()
+      );
+    }
+
+    // Calculate end time from the actual start time: every consultation gets exactly 15 minutes.
+    if (!consultationStartTimeRef.current) {
       return;
     }
 
-    setConsultationEndTime(endTime);
+    const consultationEndTime = consultationStartTimeRef.current + CONSULTATION_DURATION_MS;
 
     // Setup monitoring interval
     const monitoringInterval = setInterval(() => {
       const now = Date.now();
-      const timeUntilEnd = endTime - now;
+      const timeUntilEnd = consultationEndTime - now;
       const minutesUntilEnd = timeUntilEnd / (1000 * 60);
       const secondsRemaining = Math.floor((timeUntilEnd / 1000) % 60);
       const minutesRemaining = Math.floor(minutesUntilEnd);
@@ -1460,16 +1491,16 @@ export default function FacultyDashboard() {
         setRemainingTime("Time's up!");
       }
 
-      // 1-minute warning (give warning once)
-      if (minutesUntilEnd <= 1 && minutesUntilEnd > 0.5 && !warningGiven) {
-        setWarningGiven(true);
+      // 1-minute warning (give warning once, using ref to prevent state updates)
+      if (minutesUntilEnd <= 1 && minutesUntilEnd > 0.5 && !warningGivenRef.current) {
+        warningGivenRef.current = true;
         playVoiceWarning("Warning: You have 1 minute remaining for this consultation.");
         playNotificationSound(null);
       }
 
-      // Auto-complete when time is up
-      if (timeUntilEnd <= 0 && !autoCompleteScheduled) {
-        setAutoCompleteScheduled(true);
+      // Auto-complete when time is up (using ref to prevent state updates)
+      if (timeUntilEnd <= 0 && !autoCompleteScheduledRef.current) {
+        autoCompleteScheduledRef.current = true;
         clearInterval(monitoringInterval);
         
         // Auto-complete consultation
@@ -1480,7 +1511,7 @@ export default function FacultyDashboard() {
     }, 1000); // Check every second
 
     return () => clearInterval(monitoringInterval);
-  }, [queue, warningGiven, autoCompleteScheduled]);
+  }, [queue]);
 
   return (
     <div className="min-h-[100dvh] bg-neutral-100 flex flex-col">
@@ -2392,4 +2423,3 @@ export default function FacultyDashboard() {
     </div>
   );
 }
-

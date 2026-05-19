@@ -160,7 +160,7 @@ export default function ResetPassword() {
 
         <form onSubmit={handleResetPin} className="space-y-6">
           <input
-            type="text"
+            type="password"
             value={pin}
             onChange={(e) => setPin(e.target.value)}
             placeholder="New PIN (4-6 digits)"
@@ -177,7 +177,7 @@ export default function ResetPassword() {
           />
 
           <input
-            type="text"
+            type="password"
             value={confirmPin}
             onChange={(e) => setConfirmPin(e.target.value)}
             placeholder="Confirm PIN (4-6 digits)"

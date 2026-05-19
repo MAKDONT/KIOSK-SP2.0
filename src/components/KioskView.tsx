@@ -772,7 +772,7 @@ export default function KioskView() {
                 
                 <div className="space-y-4">
                   <input
-                    type="text"
+                    type="password"
                     inputMode="numeric"
                     value={pinAttempt}
                     onChange={(e) => {
@@ -852,7 +852,7 @@ export default function KioskView() {
                 
                 <div className="space-y-4">
                   <input
-                    type="text"
+                    type="password"
                     inputMode="numeric"
                     value={newPin}
                     onChange={(e) => {
@@ -871,7 +871,7 @@ export default function KioskView() {
                     autoFocus
                   />
                   <input
-                    type="text"
+                    type="password"
                     inputMode="numeric"
                     value={confirmPin}
                     onChange={(e) => {

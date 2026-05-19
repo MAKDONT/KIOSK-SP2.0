@@ -329,6 +329,25 @@ const normalizeAvailabilityData = (fullNameField: any): any[] => {
   }
 };
 
+const getFacultyDisplayName = (faculty: any): string => {
+  const name = typeof faculty?.name === "string" ? faculty.name.trim() : "";
+  if (name) return name;
+
+  const fullName = typeof faculty?.full_name === "string" ? faculty.full_name.trim() : "";
+  if (!fullName) return "Faculty Member";
+
+  try {
+    const parsed = JSON.parse(fullName);
+    if (Array.isArray(parsed) || typeof parsed === "object") {
+      return "Faculty Member";
+    }
+  } catch {
+    return fullName;
+  }
+
+  return fullName;
+};
+
 /**
  * Check if a faculty has any available (future) time slots
  * Returns true if they have at least one available slot, false otherwise
@@ -8481,8 +8500,7 @@ async function startServer() {
                   <p><strong>A consultation is starting now!</strong></p>
                   <p><strong>Student:</strong> ${studentName}</p>
                   <p><strong>Time:</strong> ${timePart}</p>
-                  <p>Please join the meeting immediately using the link below.</p>
-                  <p><strong>Meeting Link:</strong> <a href="${meetLink}">${meetLink}</a></p>
+                  <p>Please join the meeting immediately using the faculty dashboard.</p>
                   <p>If you have any technical issues, please contact support.</p>
                   <br/>
                   <p>Best regards,<br/>Consultation System</p>
@@ -8669,7 +8687,7 @@ async function startServer() {
             console.log(`      Queue date ${queueDate} is before today ${todayPHT} -> expired`);
             try {
               const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
-              const facultyName = (consultation as any)?.faculty?.full_name || (consultation as any)?.faculty?.name || "Faculty Member";
+              const facultyName = getFacultyDisplayName((consultation as any)?.faculty);
 
               const { error: updateError } = await getSupabase()
                 .from("queue")
@@ -8766,7 +8784,7 @@ async function startServer() {
 
             try {
               const studentEmail = consultation.student_email || (consultation as any)?.students?.email;
-              const facultyName = (consultation as any)?.faculty?.full_name || (consultation as any)?.faculty?.name || "Faculty Member";
+              const facultyName = getFacultyDisplayName((consultation as any)?.faculty);
               
               // Mark as cancelled (no-show) since student's scheduled time is over and they haven't been served
               const { error: updateError } = await getSupabase()
