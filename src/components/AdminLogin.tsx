@@ -39,8 +39,11 @@ export default function AdminLogin() {
         
         if (res.ok && isMountedRef.current) {
           navigate("/admin/dashboard");
+        } else if (isMountedRef.current && res.status !== 401) {
+          // Invalid session - clear localStorage (but don't log 401 as it's expected)
+          localStorage.removeItem("user_role");
         } else if (isMountedRef.current) {
-          // Invalid session - clear localStorage
+          // 401 is expected - user not logged in
           localStorage.removeItem("user_role");
         }
       } catch (err: any) {
@@ -67,7 +70,7 @@ export default function AdminLogin() {
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (!isMountedRef.current || submittingRef.current) return;
+      if (!isMountedRef.current) return;
       
       const data = event.data;
       if (!data || typeof data !== "object") return;
@@ -86,12 +89,12 @@ export default function AdminLogin() {
         setError(data.error || "Google login failed");
         submittingRef.current = false;
       } else if (data.type === "ADMIN_RESET_SUCCESS") {
-        submittingRef.current = true;
         oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
         setGoogleLoading(false);
         setResetEmail(data.email || "");
         setView("reset_form");
+        submittingRef.current = false;
       } else if (data.type === "ADMIN_RESET_ERROR") {
         oauthWindowRef.current?.close();
         oauthWindowRef.current = null;
@@ -265,8 +268,13 @@ export default function AdminLogin() {
     
     submittingRef.current = true;
     setError("");
-    if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters");
+    if (newPassword.length < 8) {
+      setError("Password must be at least 8 characters");
+      submittingRef.current = false;
+      return;
+    }
+    if (newPassword.length > 128) {
+      setError("Password must not exceed 128 characters");
       submittingRef.current = false;
       return;
     }
@@ -292,6 +300,7 @@ export default function AdminLogin() {
       const fetchPromise = fetch("/api/admin/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: resetEmail, new_password: newPassword }),
         signal: abortControllerRef.current.signal,
       });
@@ -355,6 +364,7 @@ export default function AdminLogin() {
             </div>
             <h1 className="text-3xl font-bold tracking-tight" style={{ color: 'var(--clay-text-primary)' }}>Set New Password</h1>
             <p style={{ color: 'var(--clay-text-secondary)' }}>Verified as <span className="font-semibold" style={{ color: 'var(--clay-text-primary)' }}>{resetEmail}</span></p>
+            <p style={{ color: 'var(--clay-text-secondary)', fontSize: '0.875rem' }}>Enter an 8+ character password</p>
           </div>
 
           <form onSubmit={handleResetPassword} className="space-y-5">
@@ -365,10 +375,11 @@ export default function AdminLogin() {
                   type={showNewPassword ? "text" : "password"}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password (min 6 chars)"
+                  placeholder="Enter new password (min 8 chars)"
                   className="w-full p-4 pr-12 rounded-2xl focus:ring-0 outline-none transition-colors" style={{ borderColor: 'var(--clay-border)', borderWidth: '2px', background: 'var(--clay-bg-secondary)' }}
                   required
-                  minLength={6}
+                  minLength={8}
+                  autoComplete="new-password"
                 />
                 <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-4 top-1/2 -translate-y-1/2" style={{ color: 'var(--clay-text-secondary)' }}>
                   {showNewPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
@@ -385,7 +396,8 @@ export default function AdminLogin() {
                   placeholder="Confirm new password"
                   className="w-full p-4 pr-12 rounded-2xl focus:ring-0 outline-none transition-colors" style={{ borderColor: 'var(--clay-border)', borderWidth: '2px', background: 'var(--clay-bg-secondary)' }}
                   required
-                  minLength={6}
+                  minLength={8}
+                  autoComplete="new-password"
                 />
                 <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2" style={{ color: 'var(--clay-text-secondary)' }}>
                   {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
@@ -398,7 +410,8 @@ export default function AdminLogin() {
             <button
               type="submit"
               disabled={loading || !newPassword || !confirmPassword}
-              className="w-full flex items-center justify-center gap-2 py-4 px-4 text-white text-lg font-bold rounded-2xl transition-colors" style={{ background: 'var(--clay-accent-warm)' }}
+              className="w-full flex items-center justify-center gap-2 py-4 px-4 text-white text-lg font-bold rounded-2xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed" 
+              style={{ background: loading || !newPassword || !confirmPassword ? '#d4a574' : 'var(--clay-accent-warm)' }}
             >
               <KeyRound className="w-5 h-5" />
               {loading ? "Resetting..." : "Reset Password"}
@@ -482,6 +495,7 @@ export default function AdminLogin() {
               placeholder="Enter admin password"
               className="w-full p-4 rounded-2xl focus:ring-0 outline-none transition-colors" style={{ borderColor: 'var(--clay-border)', borderWidth: '2px', background: 'var(--clay-bg-secondary)' }}
               required
+              autoComplete="current-password"
             />
           </div>
 
@@ -532,4 +546,3 @@ export default function AdminLogin() {
     </div>
   );
 }
-
