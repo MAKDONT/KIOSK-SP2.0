@@ -279,7 +279,7 @@ async function sendCriticalEmail(to: string, subject: string, html: string, emai
   }
 }
 
-async function sendEmailNotificationWithPriority(to: string, subject: string, html: string, priority: "high" | "normal" = "normal") {
+async function sendEmailNotificationWithPriority(to: string, subject: string, html: string, priority: "high" | "normal" = "high") {
   if (!process.env.SENDGRID_API_KEY) {
     console.log("[Email] SendGrid not configured. Email skipped.");
     return;
@@ -734,7 +734,7 @@ interface EmailJob {
   attempts: number;
   nextRetryAt?: number;
   lastError?: string;
-  priority: "high" | "normal"; // "high" for verification, password reset; "normal" for notifications
+  priority: "high" | "normal"; // All app emails should be enqueued as "high"; "normal" is kept for legacy compatibility.
 }
 
 class EmailQueue {
@@ -1209,8 +1209,8 @@ const persistSendGridWebhookEvent = async (event: any) => {
 };
 
 async function sendEmailNotification(to: string, subject: string, html: string) {
-  // Regular notifications use normal priority - will be sent after verification emails
-  await sendEmailNotificationWithPriority(to, subject, html, "normal");
+  // All email notifications are high priority.
+  await sendEmailNotificationWithPriority(to, subject, html, "high");
 }
 
 /**
@@ -1523,13 +1523,11 @@ async function startServer() {
       // Minimal HTML payload - critical for low latency
       let emailHtml = `<p>Test ID: ${testId}</p>`;
 
-      // Determine priority based on type
-      let priority: "high" | "normal" = "normal";
+      // All emails are high priority, including test emails.
+      let priority: "high" | "normal" = "high";
       if (type === "verification") {
-        priority = "high";
         emailSubject = "Test Email - High Priority (Verification)";
       } else if (type === "password-reset") {
-        priority = "high";
         emailSubject = "Test Email - High Priority (Password Reset)";
       }
 

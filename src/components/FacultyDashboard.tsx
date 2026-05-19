@@ -68,6 +68,14 @@ const getConsultationTimeLabel = (consultation: Consultation) => {
   const scheduledSlot = consultation.time_period?.trim();
   
   if (scheduledSlot) {
+    const slotAlreadyIncludesDay = WEEKDAY_OPTIONS.some((day) =>
+      scheduledSlot.toLowerCase().startsWith(`${day.toLowerCase()} `)
+    );
+
+    if (slotAlreadyIncludesDay) {
+      return scheduledSlot;
+    }
+
     // If time_period exists, prepend the day name from queue_date
     if (consultation.queue_date) {
       // Parse queue_date (YYYY-MM-DD format) to get day of week
