@@ -113,10 +113,19 @@ const SUPABASE_RECORDINGS_RETENTION_HOURS =
     : 48;
 const APP_TIMEZONE = unwrapEnvValue(process.env.APP_TIMEZONE) || "Asia/Manila";
 const CONSULTATION_DURATION_MS = 15 * 60 * 1000;
+let activeConsultationTimerColumnsMissingWarned = false;
 
 const normalizeEmail = (value: unknown) => (
   typeof value === "string" ? value.trim().toLowerCase() : ""
 );
+
+const isMissingColumnError = (error: unknown, columnName: string) => {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  return (
+    message.includes(columnName.toLowerCase()) &&
+    (message.includes("schema cache") || message.includes("column") || message.includes("does not exist"))
+  );
+};
 
 // --- Password Hashing Utilities ---
 const SCRYPT_KEYLEN = 64;
@@ -5533,33 +5542,37 @@ async function startServer() {
   // Get Queue for Faculty
   app.get("/api/faculty/:faculty_id/queue", async (req, res) => {
     try {
-      let { data, error } = await getSupabase()
-        .from("queue")
-        .select(`
-          id, student_id, status, created_at, start_time, end_time, queue_date, meet_link, purpose,
-          students (full_name, student_number)
-        `)
-        .eq("faculty_id", req.params.faculty_id)
-        .in("status", ["waiting", "serving", "ongoing"])
-        .order("created_at", { ascending: true });
+      const fetchFacultyQueue = async (includePurpose: boolean, includeTimerFields: boolean) => {
+        const fields = [
+          "id",
+          "student_id",
+          "status",
+          "created_at",
+          ...(includeTimerFields ? ["start_time", "end_time"] : []),
+          "queue_date",
+          "meet_link",
+          ...(includePurpose ? ["purpose"] : []),
+          "students (full_name, student_number)",
+        ];
+
+        return await getSupabase()
+          .from("queue")
+          .select(fields.join(", "))
+          .eq("faculty_id", req.params.faculty_id)
+          .in("status", ["waiting", "serving", "ongoing"])
+          .order("created_at", { ascending: true });
+      };
+
+      let { data, error } = await fetchFacultyQueue(true, true);
 
       if (error) {
-        const message = String(error.message || "").toLowerCase();
-        const missingPurposeColumn =
-          message.includes("purpose") &&
-          (message.includes("schema cache") || message.includes("column"));
+        const includePurpose = !isMissingColumnError(error, "purpose");
+        const includeTimerFields =
+          !isMissingColumnError(error, "start_time") &&
+          !isMissingColumnError(error, "end_time");
 
-        if (missingPurposeColumn) {
-          const fallback = await getSupabase()
-            .from("queue")
-            .select(`
-              id, student_id, status, created_at, start_time, end_time, queue_date, meet_link,
-              students (full_name, student_number)
-            `)
-            .eq("faculty_id", req.params.faculty_id)
-            .in("status", ["waiting", "serving", "ongoing"])
-            .order("created_at", { ascending: true });
-
+        if (!includePurpose || !includeTimerFields) {
+          const fallback = await fetchFacultyQueue(includePurpose, includeTimerFields);
           data = fallback.data as any;
           error = fallback.error;
         }
@@ -5774,14 +5787,21 @@ async function startServer() {
         .eq("id", consultationId);
 
       if (updateError) {
-        const updateMessage = String(updateError.message || "").toLowerCase();
-        const missingRecordingEnabledColumn =
-          updateMessage.includes("recording_enabled") &&
-          (updateMessage.includes("schema cache") || updateMessage.includes("column"));
+        const shouldRetryWithoutOptionalColumns =
+          isMissingColumnError(updateError, "recording_enabled") ||
+          isMissingColumnError(updateError, "start_time") ||
+          isMissingColumnError(updateError, "end_time");
 
-        if (missingRecordingEnabledColumn) {
-          console.warn("Queue status update fallback: 'recording_enabled' column not found. Retrying without recording flag persistence.");
+        if (shouldRetryWithoutOptionalColumns) {
+          if (isMissingColumnError(updateError, "recording_enabled")) {
+            console.warn("Queue status update fallback: 'recording_enabled' column not found. Retrying without recording flag persistence.");
+          }
+          if (isMissingColumnError(updateError, "start_time") || isMissingColumnError(updateError, "end_time")) {
+            console.warn("Queue status update fallback: 'start_time/end_time' columns not found. Run migration-add-consultation-timer-columns.sql to enable Render-enforced 15-minute auto-completion.");
+          }
           delete updates.recording_enabled;
+          delete updates.start_time;
+          delete updates.end_time;
 
           const retry = await getSupabase()
             .from("queue")
@@ -8657,6 +8677,13 @@ async function startServer() {
         }, 2, 500);
 
         if (fetchError) {
+          if (isMissingColumnError(fetchError, "start_time") || isMissingColumnError(fetchError, "end_time")) {
+            if (!activeConsultationTimerColumnsMissingWarned) {
+              activeConsultationTimerColumnsMissingWarned = true;
+              console.warn("⚠️ Active consultation timer columns are missing. Run migration-add-consultation-timer-columns.sql in Supabase to enable Render-enforced 15-minute auto-completion.");
+            }
+            return;
+          }
           console.error("❌ Active consultation completion fetch error:", fetchError.message);
           return;
         }
